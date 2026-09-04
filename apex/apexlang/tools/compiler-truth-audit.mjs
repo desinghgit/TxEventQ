@@ -33,6 +33,7 @@ const SUPPORTED_COMPONENTS = new Set([
   "process",
   "computation",
   "validation",
+  "lov",
   "list",
   "entry",
   "breadcrumb",
@@ -155,6 +156,14 @@ async function collectApxFiles(targetPath) {
 
 function normalizePropertySemanticValue(property, value) {
   const normalized = normalizeSemanticValue(value);
+  if (
+    property?.propertyId === "94" &&
+    property?.lov?.type === "PLUGINS" &&
+    String(normalized).startsWith("themeTemplateComponent/")
+  ) {
+    const pluginName = String(normalized).slice("themeTemplateComponent/".length);
+    return `TMPL_${pluginName}`;
+  }
   const token = String(normalized).replace(/[^A-Za-z0-9]/g, "").toLowerCase();
   const match = (property?.lov?.values || []).find(({ name, returnValue }) =>
     [name, returnValue].some((candidate) =>
@@ -344,14 +353,14 @@ export function auditApxText(filePath, text, map) {
       }
     }
 
-    const blockMatch = trimmed.match(/^([A-Za-z][A-Za-z0-9]*)\b(?:\s+[^({]+?)?\s*([({])/);
+    const blockMatch = trimmed.match(/^([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)*)\b(?:\s+[^({]+?)?\s*([({])/);
     if (blockMatch) {
       const [, token, delimiter] = blockMatch;
       const parentComponent = nearestComponent(stack);
       const parentName = parentComponent?.name || "";
       const { opens, closes } = lineOpenCloseBalance(line);
       const shouldPush = opens > closes;
-      if (delimiter === "(" && SUPPORTED_COMPONENTS.has(token) && !opaqueScope) {
+      if (delimiter === "(" && SUPPORTED_COMPONENTS.has(token)) {
         const { record, failure, candidates } = resolveRecordFor(map, token, parentComponent);
         if (!record) {
           addIssue(

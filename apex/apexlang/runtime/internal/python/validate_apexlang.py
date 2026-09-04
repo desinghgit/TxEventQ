@@ -16,6 +16,7 @@ from typing import Any, Callable
 from validator_common import (
     APEXLANG_GRAMMAR_PATH,
     COMPONENT_ATTRIBUTES_PATH,
+    FONT_APEX_ICON_INDEX_PATH,
     LOG_ROOT,
     PACKAGED_SKILL,
     ROOT,
@@ -148,12 +149,36 @@ ICON_LITERAL_PROPERTIES = {
     "linkIcon",
     "noDataFoundIcon",
 }
+_FONT_APEX_ICON_INDEX: tuple[set[str], set[str]] | None = None
+AVATAR_URL_BIND_PATTERN = re.compile(
+    r"(?is)^\s*:(APP_FILES|APEX_FILES)\s*\|\|\s*'((?:''|[^'])+)'\s*$"
+)
+AVATAR_CSS_FRAMEWORK_PREFIXES = ("a-", "is-", "js-", "t-", "u-")
+AVATAR_CSS_ALWAYS_FORBIDDEN_PATTERNS = (
+    re.compile(r"(?:^|[-_])hidden(?:$|[-_])"),
+    re.compile(r"(?:^|[-_])visually[-_]?hidden(?:$|[-_])"),
+    re.compile(r"(?:^|[-_])screen[-_]?reader(?:$|[-_])"),
+    re.compile(r"(?:^|[-_])sr[-_]?only(?:$|[-_])"),
+    re.compile(r"(?:^|[-_])hide(?:$|[-_]|[a-z])"),
+    re.compile(r"(?:^|[-_])(?:invisible|offscreen|display[-_]?none|opacity[-_]?0|collapse[dp]?)(?:$|[-_]|[a-z])"),
+)
+BADGE_ALLOWED_STATE_VALUES = {"danger", "info", "success", "warning"}
+BADGE_ALLOWED_VALUE_DATA_TYPES = {
+    "date",
+    "intervaldaytosecond",
+    "intervalyeartomonth",
+    "number",
+    "varchar2",
+}
 PROJECTION_COVERAGE_REGION_TYPES = {
+    "avatar",
+    "badge",
     "classicReport",
     "interactiveReport",
     "interactiveGrid",
     "contentRow",
     "metricCard",
+    "timeline",
 }
 DASHBOARD_LAYOUT_ROW_REGION_TYPES = {
     "cards",
@@ -508,10 +533,16 @@ def apexlang_template_variant_key(component: ApexlangSnippetComponent) -> str | 
     """Infer a component variant from direct template properties."""
     if component.keyword == "region":
         region_type = apexlang_template_direct_property_value(component.text, "type")
+        if region_type == "themeTemplateComponent/badge":
+            return "badge"
         if region_type == "themeTemplateComponent/metricCard":
             return "metricCard"
         if region_type == "themeTemplateComponent/contentRow":
             return "contentRow"
+        if region_type == "themeTemplateComponent/timeline":
+            return "timeline"
+        if region_type == "themeTemplateComponent/avatar":
+            return "avatar"
         return region_type
     if component.keyword == "pageItem":
         item_type = apexlang_template_direct_property_value(component.text, "type")
@@ -873,7 +904,7 @@ def find_component_blocks(text: str, keyword: str) -> list[tuple[int, str, str]]
 def find_named_brace_blocks(text: str) -> list[tuple[int, str, str]]:
     """Find named brace blocks while respecting quoted strings."""
     results: list[tuple[int, str, str]] = []
-    pattern = re.compile(r"(?m)^[ \t]*([A-Za-z][A-Za-z0-9]*)\s*\{")
+    pattern = re.compile(r"(?m)^[ \t]*([A-Za-z][A-Za-z0-9-]*)\s*\{")
     for match in pattern.finditer(text):
         start = match.start()
         name = match.group(1)
@@ -903,10 +934,16 @@ def extract_item_type(block: str) -> str | None:
 
 def region_schema_key(region_type: str) -> str:
     """Map a region type to its component schema key."""
+    if region_type == "themeTemplateComponent/badge":
+        return "badge"
     if region_type == "themeTemplateComponent/contentRow":
         return "contentRow"
     if region_type == "themeTemplateComponent/metricCard":
         return "metricCard"
+    if region_type == "themeTemplateComponent/timeline":
+        return "timeline"
+    if region_type == "themeTemplateComponent/avatar":
+        return "avatar"
     return region_type
 
 
@@ -1001,6 +1038,37 @@ def find_immediate_component_blocks(block: str, keyword: str) -> list[tuple[int,
         if paren_depth == 0 and brace_depth == 0:
             results.append((body_offset + start, name, child_block))
     return results
+
+
+def find_immediate_unnamed_component_blocks(block: str, keyword: str) -> list[tuple[int, str, str]]:
+    """Find immediate child components whose grammar permits an omitted identifier."""
+    body_offset, body = block_body(block)
+    results: list[tuple[int, str, str]] = []
+    pattern = re.compile(
+        rf"^[ \t]*{re.escape(keyword)}(?:\s+([A-Za-z0-9_$-]+))?\s*\(",
+        re.MULTILINE,
+    )
+    for match in pattern.finditer(body):
+        start = match.start()
+        paren_depth, brace_depth = nesting_depth(body, start)
+        if paren_depth != 0 or brace_depth != 0:
+            continue
+        depth = 0
+        for idx in range(start, len(body)):
+            ch = body[idx]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    results.append((body_offset + start, match.group(1) or "", body[start : idx + 1]))
+                    break
+    return results
+
+
+def find_region_column_blocks(region_type_key: str, region_block: str) -> list[tuple[int, str, str]]:
+    """Find immediate named region-column components."""
+    return find_immediate_component_blocks(region_block, "column")
 
 
 def find_immediate_named_brace_blocks(block: str, block_name: str) -> list[tuple[int, str]]:
@@ -4178,6 +4246,84 @@ def split_sql_top_level(sql_text: str, delimiter: str) -> list[str]:
     return parts
 
 
+def split_sql_top_level_set_queries(sql_text: str) -> list[str]:
+    """Split a SQL set query at top-level UNION operators outside quotes and parentheses."""
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_single_quote = False
+    in_double_quote = False
+    idx = 0
+    lower = sql_text.lower()
+
+    while idx < len(sql_text):
+        char = sql_text[idx]
+        next_char = sql_text[idx + 1] if idx + 1 < len(sql_text) else ""
+
+        if in_single_quote:
+            current.append(char)
+            if char == "'" and next_char == "'":
+                current.append(next_char)
+                idx += 2
+                continue
+            if char == "'":
+                in_single_quote = False
+            idx += 1
+            continue
+
+        if in_double_quote:
+            current.append(char)
+            if char == '"':
+                in_double_quote = False
+            idx += 1
+            continue
+
+        if char == "'":
+            in_single_quote = True
+            current.append(char)
+            idx += 1
+            continue
+
+        if char == '"':
+            in_double_quote = True
+            current.append(char)
+            idx += 1
+            continue
+
+        if char == "(":
+            depth += 1
+            current.append(char)
+            idx += 1
+            continue
+
+        if char == ")":
+            depth = max(depth - 1, 0)
+            current.append(char)
+            idx += 1
+            continue
+
+        if depth == 0 and lower.startswith("union", idx):
+            previous = sql_text[idx - 1] if idx > 0 else " "
+            after_union = idx + 5
+            following = sql_text[after_union] if after_union < len(sql_text) else " "
+            if not (previous.isalnum() or previous == "_") and not (following.isalnum() or following == "_"):
+                parts.append("".join(current).strip())
+                current = []
+                idx = after_union
+                modifier_match = re.match(r"(?is)\s+(?:all|distinct)\b", sql_text[idx:])
+                if modifier_match:
+                    idx += modifier_match.end()
+                continue
+
+        current.append(char)
+        idx += 1
+
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
 def extract_top_level_select_list(sql_text: str) -> list[str] | None:
     """Extract the top-level select-list expressions for simple SELECT queries."""
     stripped = strip_sql_comments(sql_text).strip().rstrip(";")
@@ -4308,11 +4454,37 @@ def collect_blob_column_mappings(text: str) -> set[str]:
     return mappings
 
 
-def likely_lob_identifier(identifier: str, known_lob_identifiers: set[str]) -> bool:
+def collect_explicit_non_lob_column_mappings(text: str) -> set[str]:
+    """Collect child-column mappings explicitly declared with scalar datatypes."""
+    mappings: set[str] = set()
+    lob_data_types = {"blob", "clob", "nclob", "bfile"}
+    for _column_start, _column_name, column_block in find_component_blocks(text, "column"):
+        source_meta = extract_top_level_blocks(column_block).get("source")
+        if not source_meta:
+            continue
+        _source_offset, source_block = source_meta
+        source_props = {
+            prop_name: prop_value
+            for prop_name, prop_value, _prop_offset in extract_immediate_brace_property_values(source_block)
+        }
+        database_column = source_props.get("databaseColumn", "")
+        data_type = normalize_value(source_props.get("dataType", ""))
+        if database_column and data_type and data_type not in lob_data_types:
+            mappings.add(normalize_lob_identifier(database_column))
+    return mappings
+
+
+def likely_lob_identifier(
+    identifier: str,
+    known_lob_identifiers: set[str],
+    known_non_lob_identifiers: set[str],
+) -> bool:
     """Return whether an identifier is likely to represent a raw LOB expression."""
     normalized = normalize_lob_identifier(identifier)
     if normalized in known_lob_identifiers:
         return True
+    if normalized in known_non_lob_identifiers:
+        return False
     return bool(
         re.search(r"(?i)(?:^|_)(?:blob|clob|nclob|bfile)$", normalized)
         or re.search(r"(?i)_(?:image|file|content)$", normalized)
@@ -4341,7 +4513,11 @@ def mask_dbms_lob_getlength(sql_text: str) -> str:
     return "".join(chars)
 
 
-def find_lob_identifier_in_expression(expression: str, known_lob_identifiers: set[str]) -> tuple[str, int] | None:
+def find_lob_identifier_in_expression(
+    expression: str,
+    known_lob_identifiers: set[str],
+    known_non_lob_identifiers: set[str],
+) -> tuple[str, int] | None:
     """Return the first likely raw LOB identifier in an expression after scalar wrappers are masked."""
     masked = mask_dbms_lob_getlength(expression)
     for match in re.finditer(
@@ -4349,7 +4525,7 @@ def find_lob_identifier_in_expression(expression: str, known_lob_identifiers: se
         masked,
     ):
         token = match.group(0)
-        if likely_lob_identifier(token, known_lob_identifiers):
+        if likely_lob_identifier(token, known_lob_identifiers, known_non_lob_identifiers):
             return token, match.start()
     return None
 
@@ -4370,10 +4546,11 @@ def inspect_lob_key_terms(
     body_base: int,
     context: str,
     known_lob_identifiers: set[str],
+    known_non_lob_identifiers: set[str],
 ) -> None:
     """Inspect comma-separated key terms and report likely raw LOB usage."""
     for term in split_sql_top_level(body, ","):
-        lob_meta = find_lob_identifier_in_expression(term, known_lob_identifiers)
+        lob_meta = find_lob_identifier_in_expression(term, known_lob_identifiers, known_non_lob_identifiers)
         if not lob_meta:
             continue
         lob_identifier, rel_in_term = lob_meta
@@ -4397,6 +4574,7 @@ def inspect_lob_comparison_predicates(
     body_base: int,
     context: str,
     known_lob_identifiers: set[str],
+    known_non_lob_identifiers: set[str],
 ) -> None:
     """Inspect WHERE/HAVING/ON predicate bodies for direct raw LOB comparisons."""
     masked = mask_dbms_lob_getlength(body)
@@ -4405,7 +4583,7 @@ def inspect_lob_comparison_predicates(
     )
     for match in token_pattern.finditer(masked):
         token = match.group(0)
-        if not likely_lob_identifier(token, known_lob_identifiers):
+        if not likely_lob_identifier(token, known_lob_identifiers, known_non_lob_identifiers):
             continue
         before = masked[max(0, match.start() - 48) : match.start()]
         after = masked[match.end() : match.end() + 48]
@@ -4424,6 +4602,7 @@ def lint_sql_lob_comparison_keys(path: Path, text: str) -> list[str]:
     """Reject obvious raw LOB expressions in SQL/PLSQL comparison-key positions."""
     issues: list[str] = []
     known_lob_identifiers = collect_blob_column_mappings(text)
+    known_non_lob_identifiers = collect_explicit_non_lob_column_mappings(text)
     stop_clauses = (
         r"from|where|group\s+by|having|order\s+by|fetch|offset|union(?:\s+all)?|intersect|minus|"
         r"connect\s+by|start\s+with|model|returning"
@@ -4447,6 +4626,7 @@ def lint_sql_lob_comparison_keys(path: Path, text: str) -> list[str]:
                 body_base=distinct_match.start("body"),
                 context=f"{label} SELECT DISTINCT",
                 known_lob_identifiers=known_lob_identifiers,
+                known_non_lob_identifiers=known_non_lob_identifiers,
             )
 
         for clause, context in (
@@ -4464,6 +4644,7 @@ def lint_sql_lob_comparison_keys(path: Path, text: str) -> list[str]:
                     body_base=match.start("body"),
                     context=f"{label} {context}",
                     known_lob_identifiers=known_lob_identifiers,
+                    known_non_lob_identifiers=known_non_lob_identifiers,
                 )
 
         for over_match in re.finditer(r"(?is)\bover\s*\((?P<body>.*?)\)", sql):
@@ -4484,6 +4665,7 @@ def lint_sql_lob_comparison_keys(path: Path, text: str) -> list[str]:
                         body_base=over_match.start("body") + clause_match.start("body"),
                         context=f"{label} {context}",
                         known_lob_identifiers=known_lob_identifiers,
+                        known_non_lob_identifiers=known_non_lob_identifiers,
                     )
 
         if re.search(r"(?is)\b(?:union(?:\s+all)?|intersect|minus)\b", sql):
@@ -4503,6 +4685,7 @@ def lint_sql_lob_comparison_keys(path: Path, text: str) -> list[str]:
                     body_base=max(part_offset, 0),
                     context=f"{label} set operation SELECT list",
                     known_lob_identifiers=known_lob_identifiers,
+                    known_non_lob_identifiers=known_non_lob_identifiers,
                 )
 
         predicate_patterns = [
@@ -4526,6 +4709,7 @@ def lint_sql_lob_comparison_keys(path: Path, text: str) -> list[str]:
                     body_base=match.start("body"),
                     context=f"{label} {context}",
                     known_lob_identifiers=known_lob_identifiers,
+                    known_non_lob_identifiers=known_non_lob_identifiers,
                 )
 
     for fence_match in re.finditer(r"(?ms)```(?P<lang>sql|plsql)\s*(?P<body>.*?)\s*```", text):
@@ -4670,15 +4854,21 @@ def collect_rest_profiles_from_text(text: str) -> dict[str, list[str]]:
 def build_validation_context(targets: list[Path]) -> dict[str, Any]:
     """Build cross-file validation context used for projection coverage checks."""
     rest_profiles: dict[str, list[str]] = {}
+    authorization_schemes: set[str] = set()
     for target in targets:
         try:
             text = target.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
         rest_profiles.update(collect_rest_profiles_from_text(text))
+        authorization_schemes.update(
+            normalize_component_reference(identifier)
+            for _offset, identifier, _block in find_component_blocks(text, "authorization")
+        )
     return {
         "schema_columns": load_schema_dictionary_columns(),
         "rest_profiles": rest_profiles,
+        "authorization_schemes": authorization_schemes,
     }
 
 
@@ -4708,7 +4898,7 @@ def source_projection_columns(
     top_level_blocks: dict[str, tuple[int, str]],
     validation_context: dict[str, Any] | None,
 ) -> tuple[list[str], str | None, str]:
-    """Resolve source projection columns for SQL, table, or REST-backed regions."""
+    """Resolve source columns when local metadata can prove the selected source projection."""
     source_meta = top_level_blocks.get("source")
     if not source_meta:
         return [], None, "none"
@@ -4730,7 +4920,7 @@ def source_projection_columns(
         return aliases, error, "sql"
 
     table_meta = source_props.get("tableName")
-    if table_meta or source_type == "table":
+    if table_meta or source_type in {"table", "tableview"}:
         table_name = clean_scalar_value(table_meta[0]) if table_meta else ""
         if not table_name:
             return [], "table source projection requires source.tableName", "table"
@@ -4754,16 +4944,303 @@ def source_projection_columns(
             return [], f"REST source projection for '{rest_reference or rest_name}' requires resolvable dataProfileCol metadata", "rest"
         return columns, None, "rest"
 
-    return [], None, "none"
+    opaque_source_kinds = {
+        "functionbody": "functionBody",
+        "propertygraph": "propertyGraph",
+    }
+    if source_type in opaque_source_kinds:
+        return [], None, opaque_source_kinds[source_type]
+
+    location_source_kinds = {
+        "jsondualityview": "jsonDualityView",
+        "jsonsource": "jsonSource",
+        "sampledata": "sampleData",
+    }
+    if location in location_source_kinds:
+        return [], None, location_source_kinds[location]
+
+    # Preserve compiler-supported future source modes. Their explicit child-column
+    # declarations remain locally checkable even when their runtime projection is not.
+    return [], None, "opaque"
 
 
 def projection_source_requires_columns(region_type_key: str, top_level_blocks: dict[str, tuple[int, str]]) -> bool:
     """Return whether this region family must mirror source projections with child columns."""
     if region_type_key in {"classicReport", "interactiveReport", "interactiveGrid"}:
         return source_block_is_sql_or_table_backed(top_level_blocks) or source_block_is_rest_backed(top_level_blocks)
-    if region_type_key in {"contentRow", "metricCard"}:
+    if region_type_key == "badge":
+        return content_row_display_mode(top_level_blocks) == "report" and "source" in top_level_blocks
+    if region_type_key in {"avatar", "contentRow", "metricCard", "timeline"}:
         return content_row_display_mode(top_level_blocks) == "report" and source_block_has_data_projection(top_level_blocks)
     return False
+
+
+def badge_state_literal_results(expression: str) -> set[str] | None:
+    """Return statically proven semantic results from one Badge state SQL expression."""
+    expression_body = expression.strip()
+    identifier = extract_select_expression_identifier(expression_body)
+    if identifier and not (
+        normalize_sql_identifier(identifier) == "end"
+        and re.match(r"(?is)^case\b", expression_body)
+        and re.search(r"(?is)\bend\s*$", expression_body)
+    ):
+        expression_body = re.sub(
+            rf"(?is)\s+(?:as\s+)?{re.escape(identifier)}\s*$",
+            "",
+            expression_body,
+        ).strip()
+
+    literal_match = re.fullmatch(r"'((?:''|[^'])*)'", expression_body, re.DOTALL)
+    if literal_match:
+        return {literal_match.group(1).replace("''", "'")}
+
+    if not re.match(r"(?is)^case\b", expression_body) or not re.search(r"(?is)\bend\s*$", expression_body):
+        return None
+
+    then_values = re.findall(r"(?is)\bthen\s+'((?:''|[^'])*)'", expression_body)
+    else_values = re.findall(r"(?is)\belse\s+'((?:''|[^'])*)'", expression_body)
+    then_count = len(re.findall(r"(?is)\bthen\b", expression_body))
+    else_count = len(re.findall(r"(?is)\belse\b", expression_body))
+    if (
+        not then_values
+        or len(then_values) != then_count
+        or else_count != 1
+        or len(else_values) != else_count
+    ):
+        return None
+    return {value.replace("''", "'") for value in then_values + else_values}
+
+
+def badge_state_values_from_sql(sql_query_text: str, normalized_state_column: str) -> set[str] | None:
+    """Prove Badge state results across every top-level SQL UNION branch."""
+    set_queries = split_sql_top_level_set_queries(strip_sql_comments(sql_query_text))
+    if not set_queries:
+        return None
+
+    first_select_list = extract_top_level_select_list(set_queries[0])
+    if not first_select_list:
+        return None
+    state_index = next(
+        (
+            index
+            for index, expression in enumerate(first_select_list)
+            if normalize_sql_identifier(extract_select_expression_identifier(expression) or "") == normalized_state_column
+        ),
+        None,
+    )
+    if state_index is None:
+        return None
+
+    proven_states: set[str] = set()
+    for set_query in set_queries:
+        select_list = extract_top_level_select_list(set_query)
+        if not select_list or state_index >= len(select_list):
+            return None
+        branch_states = badge_state_literal_results(select_list[state_index])
+        if branch_states is None:
+            return None
+        proven_states.update(branch_states)
+    return proven_states
+
+
+def badge_column_source_metadata(region_block: str) -> dict[str, tuple[str, int]]:
+    """Map Badge source-column aliases to declared datatypes and region-relative offsets."""
+    metadata: dict[str, tuple[str, int]] = {}
+    for column_offset, column_identifier, column_block in find_immediate_component_blocks(region_block, "column"):
+        source_meta = extract_top_level_blocks(column_block).get("source")
+        if not source_meta:
+            continue
+        source_offset, source_block = source_meta
+        source_props = {
+            prop_name: (prop_value, prop_offset)
+            for prop_name, prop_value, prop_offset in extract_immediate_brace_property_values(source_block)
+        }
+        database_column_meta = source_props.get("databaseColumn")
+        data_type_meta = source_props.get("dataType")
+        if not data_type_meta:
+            continue
+        source_name = clean_scalar_value(database_column_meta[0]) if database_column_meta else column_identifier
+        data_type, data_type_offset = data_type_meta
+        metadata[normalize_sql_identifier(source_name)] = (
+            clean_scalar_value(data_type),
+            column_offset + source_offset + data_type_offset,
+        )
+    return metadata
+
+
+def lint_badge_source_setting_mappings(
+    *,
+    issues: list[str],
+    path: Path,
+    text: str,
+    component_start: int,
+    component_label: str,
+    region_block: str,
+    top_level_blocks: dict[str, tuple[int, str]],
+    validation_context: dict[str, Any] | None = None,
+) -> None:
+    """Enforce safe Badge mappings, semantic tokens, and link behavior."""
+    badge_actions = find_immediate_component_blocks(region_block, "action")
+    if len(badge_actions) > 1:
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + badge_actions[1][0])}: "
+            f"BADGE_ACTION_CARDINALITY_REQUIRED_001 {component_label} supports at most one link action; "
+            f"found {len(badge_actions)} actions"
+        )
+
+    settings_meta = top_level_blocks.get("settings")
+    if not settings_meta:
+        return
+
+    settings_offset, settings_block = settings_meta
+    expected_columns, projection_error, source_kind = source_projection_columns(top_level_blocks, validation_context)
+    normalized_columns = {
+        normalize_sql_identifier(column)
+        for column in expected_columns
+    } if not projection_error else set()
+
+    setting_props = {
+        prop_name: (prop_value, prop_offset)
+        for prop_name, prop_value, prop_offset in extract_immediate_brace_property_values(settings_block)
+    }
+    column_metadata = badge_column_source_metadata(region_block)
+
+    for prop_name, (prop_value, prop_offset) in setting_props.items():
+        if prop_name not in {"value", "state"}:
+            continue
+        cleaned_value = clean_scalar_value(prop_value)
+        absolute_offset = component_start + settings_offset + prop_offset
+        if AMP_SUBSTITUTION_TOKEN_PATTERN.fullmatch(cleaned_value) or "&" in cleaned_value:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, absolute_offset)}: "
+                f"DSL_RULE_VALUE {component_label} settings.{prop_name} must use a bare source-column alias "
+                f"such as BADGE_{prop_name.upper()}, not '&COLUMN_NAME.' substitution syntax"
+            )
+            continue
+        normalized_cleaned_value = normalize_sql_identifier(cleaned_value)
+        if normalized_cleaned_value not in column_metadata:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, absolute_offset)}: "
+                f"DSL_RULE_VALUE {component_label} settings.{prop_name} references '{cleaned_value}', "
+                "which is not mapped by an immediate Badge child column"
+            )
+            continue
+        if normalized_columns and normalized_cleaned_value not in normalized_columns:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, absolute_offset)}: "
+                f"DSL_RULE_VALUE {component_label} settings.{prop_name} references '{cleaned_value}', "
+                "which is not projected by the Badge source"
+            )
+
+    label_meta = setting_props.get("label")
+    if label_meta:
+        label_value, label_offset = label_meta
+        cleaned_label = clean_scalar_value(label_value)
+        label_is_dynamic = bool(
+            AMP_SUBSTITUTION_TOKEN_PATTERN.search(cleaned_label)
+            or SUBSTITUTION_TOKEN_PATTERN.search(cleaned_label)
+            or "{{" in cleaned_label
+            or "}}" in cleaned_label
+            or re.fullmatch(r":[A-Za-z][A-Za-z0-9_$#]*", cleaned_label)
+        )
+        label_contains_markup = bool(
+            re.search(r"(?is)<\s*/?\s*[A-Za-z][^>]*>|\bon[A-Za-z]+\s*=", cleaned_label)
+        )
+        if not cleaned_label or label_is_dynamic or label_contains_markup:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + settings_offset + label_offset)}: "
+                f"BADGE_LABEL_STATIC_REQUIRED_001 {component_label} settings.label must be non-empty plain static "
+                "text; source mappings, substitutions, binds, template values, HTML, and event attributes are rejected"
+            )
+
+    icon_meta = setting_props.get("icon")
+    if icon_meta:
+        icon_value, icon_offset = icon_meta
+        cleaned_icon = clean_scalar_value(icon_value)
+        if classify_fa_icon_value(cleaned_icon) == "unresolved":
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + settings_offset + icon_offset)}: "
+                f"FA_ICON_REQUIRED_001 {component_label} settings.icon must be a static catalog-listed Font APEX "
+                f"icon with optional catalog-listed modifiers; found '{cleaned_icon}'"
+            )
+
+    value_meta = setting_props.get("value")
+    if value_meta:
+        value_column, _value_offset = value_meta
+        normalized_value_column = normalize_sql_identifier(value_column)
+        value_column_meta = column_metadata.get(normalized_value_column)
+        if value_column_meta:
+            value_data_type, value_data_type_offset = value_column_meta
+            if normalize_value(value_data_type) not in BADGE_ALLOWED_VALUE_DATA_TYPES:
+                allowed_text = ", ".join(
+                    ["varchar2", "number", "date", "intervalYearToMonth", "intervalDayToSecond"]
+                )
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, component_start + value_data_type_offset)}: "
+                    f"BADGE_VALUE_DATATYPE_REQUIRED_001 {component_label} settings.value maps to "
+                    f"source.dataType '{value_data_type}', but Badge value supports only: {allowed_text}"
+                )
+
+    state_meta = setting_props.get("state")
+    if state_meta:
+        state_column, state_offset = state_meta
+        normalized_state_column = normalize_sql_identifier(state_column)
+        state_column_meta = column_metadata.get(normalized_state_column)
+        if state_column_meta:
+            state_data_type, state_data_type_offset = state_column_meta
+            if normalize_value(state_data_type) != "varchar2":
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, component_start + state_data_type_offset)}: "
+                    f"BADGE_STATE_DATATYPE_REQUIRED_001 {component_label} settings.state must map to a varchar2 "
+                    f"source column; found '{state_data_type}'"
+                )
+        proven_states: set[str] | None = None
+        source_meta = top_level_blocks.get("source")
+        if source_kind == "sql" and source_meta:
+            _source_offset, source_block = source_meta
+            sql_query_text = extract_fenced_property_body(source_block, "sqlQuery")
+            if sql_query_text:
+                proven_states = badge_state_values_from_sql(sql_query_text, normalized_state_column)
+
+        if source_kind == "sql" and (
+            proven_states is None or not proven_states.issubset(BADGE_ALLOWED_STATE_VALUES)
+        ):
+            allowed_text = ", ".join(sorted(BADGE_ALLOWED_STATE_VALUES))
+            found_text = ", ".join(sorted(proven_states)) if proven_states else "unproven dynamic values"
+            proof_hint = (
+                " For sqlQuery sources, use a literal or CASE expression whose result values are allowlisted."
+                if source_kind == "sql"
+                else " Verify the selected source contract and omit settings.state when state was not requested."
+            )
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + settings_offset + state_offset)}: "
+                f"BADGE_STATE_ALLOWLIST_REQUIRED_001 {component_label} settings.state must be proven by its "
+                f"projected source to return only: {allowed_text}; found {found_text}.{proof_hint}"
+            )
+
+    for action_offset, action_identifier, action_block in badge_actions:
+        behavior_meta = extract_top_level_blocks(action_block).get("behavior")
+        if not behavior_meta:
+            continue
+        behavior_offset, behavior_block = behavior_meta
+        for prop_name, prop_value, prop_offset in extract_immediate_brace_property_values(behavior_block):
+            absolute_offset = component_start + action_offset + behavior_offset + prop_offset
+            action_label = f"{component_label} action '{action_identifier}'"
+            if prop_name == "linkAttributes":
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, absolute_offset)}: "
+                    f"BADGE_LINK_ATTRIBUTES_FORBIDDEN_001 {action_label} must not emit custom linkAttributes; "
+                    "inline handlers and arbitrary class/attribute input are not trusted Badge link configuration"
+                )
+            elif prop_name == "targetUrl" or (
+                prop_name == "type" and normalize_value(prop_value) == "redirecturl"
+            ):
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, absolute_offset)}: "
+                    f"BADGE_TARGET_URL_ALLOWLIST_REQUIRED_001 {action_label} must use a reviewed structured target; "
+                    "Badge redirectUrl behavior and targetUrl are rejected because this repository has no "
+                    "application-specific URL allowlist"
+                )
 
 
 def projection_column_is_allowed_extra(region_type_key: str, column_block: str, normalized_name: str) -> bool:
@@ -4782,7 +5259,7 @@ def projection_column_is_allowed_extra(region_type_key: str, column_block: str, 
 def collect_emitted_projection_columns(region_type_key: str, region_block: str) -> dict[str, tuple[str, str, bool]]:
     """Collect emitted child column names mapped to source projection aliases."""
     emitted: dict[str, tuple[str, str, bool]] = {}
-    for _column_offset, column_identifier, column_block in find_immediate_component_blocks(region_block, "column"):
+    for _column_offset, column_identifier, column_block in find_region_column_blocks(region_type_key, region_block):
         source_name = column_identifier
         column_top_level_blocks = extract_top_level_blocks(column_block)
         source_meta = column_top_level_blocks.get("source")
@@ -5615,6 +6092,21 @@ def lint_page_filename_identity_contract(path: Path, text: str) -> list[str]:
                 f"{display_path(path)}:{line_no(text, page_start + issue_offset)}: "
                 f"PAGE_ALIAS_FILENAME_MISMATCH_001 file '{path.name}' requires alias '{expected_alias}'; "
                 f"got '{actual_alias or '<missing>'}'"
+            )
+    return issues
+
+
+def lint_page_direct_property_contract(path: Path, text: str) -> list[str]:
+    """Reject page identity repeated as an unsupported direct page property."""
+    issues: list[str] = []
+    for page_start, page_name, page_block in find_component_blocks(text, "page"):
+        for prop_name, _prop_value, prop_offset in extract_immediate_property_values(page_block):
+            if prop_name != "page":
+                continue
+            issues.append(
+                f"{display_path(path)}:{line_no(text, page_start + prop_offset)}: "
+                "PAGE_DIRECT_PROPERTY_INVALID_001 direct property 'page' is invalid; "
+                f"the page number belongs only in the `page {page_name} (` declaration"
             )
     return issues
 
@@ -6632,7 +7124,7 @@ def lint_faceted_search_list_entries_contract(path: Path, text: str) -> list[str
 def lint_report_sql_html_literals(path: Path, text: str) -> list[str]:
     """Reject HTML markup embedded in report SQL projection literals."""
     issues: list[str] = []
-    report_region_types = {"classicReport", "interactiveReport", "interactiveGrid", "contentRow", "metricCard"}
+    report_region_types = {"badge", "classicReport", "interactiveReport", "interactiveGrid", "contentRow", "metricCard"}
     html_pattern = re.compile(r"(?is)<\s*/?\s*(a|button|div|em|i|img|li|p|span|strong|table|td|tr|ul)\b|class\s*=|style\s*=")
     for region_start, region_name, region_block in find_component_blocks(text, "region"):
         region_type = extract_item_type(region_block) or ""
@@ -7382,6 +7874,18 @@ def lint_region_contracts(path: Path, text: str, schema: dict, validation_contex
                             f"use plugin-badge.displayBadge instead"
                         )
 
+        if region_type_key == "badge":
+            lint_badge_source_setting_mappings(
+                issues=issues,
+                path=path,
+                text=text,
+                component_start=start,
+                component_label=f"region '{region_name}' type '{region_type}'",
+                region_block=block,
+                top_level_blocks=top_level_blocks,
+                validation_context=validation_context,
+            )
+
         region_schema = region_schema_root.get(region_type_key)
         if not isinstance(region_schema, dict):
             continue
@@ -7447,12 +7951,91 @@ def lint_region_contracts(path: Path, text: str, schema: dict, validation_contex
                     template_mode=False,
                 )
 
+        if region_type_key == "avatar":
+            for block_name in ("componentAppearance", "orderBy", "settings", "security"):
+                block_data = top_level_blocks.get(block_name)
+                block_meta = region_schema.get(block_name)
+                if block_data and is_block_meta(block_meta):
+                    block_offset, block_text = block_data
+                    lint_block_properties(
+                        issues=issues,
+                        path=path,
+                        text=text,
+                        component_start=start,
+                        component_label=component_label,
+                        block_name=block_name,
+                        block_offset=block_offset,
+                        block_text=block_text,
+                        block_meta=block_meta,
+                    )
+            settings_meta = top_level_blocks.get("settings")
+            if settings_meta:
+                lint_avatar_settings_contract(
+                    issues=issues,
+                    path=path,
+                    text=text,
+                    component_start=start,
+                    component_label=component_label,
+                    region_block=block,
+                    settings_offset=settings_meta[0],
+                    settings_block=settings_meta[1],
+                    validation_context=validation_context,
+                )
+            lint_template_component_order_by(
+                issues=issues,
+                path=path,
+                text=text,
+                component_start=start,
+                component_label=component_label,
+                region_block=block,
+                top_level_blocks=top_level_blocks,
+            )
+
+        if region_type_key == "timeline":
+            for block_name in (
+                "componentAppearance",
+                "settings",
+                "plugin-avatar",
+                "plugin-badge",
+                "pagination",
+                "advanced",
+            ):
+                block_data = top_level_blocks.get(block_name)
+                block_meta = region_schema.get(block_name)
+                if block_data and is_block_meta(block_meta):
+                    block_offset, block_text = block_data
+                    lint_block_properties(
+                        issues=issues,
+                        path=path,
+                        text=text,
+                        component_start=start,
+                        component_label=component_label,
+                        block_name=block_name,
+                        block_offset=block_offset,
+                        block_text=block_text,
+                        block_meta=block_meta,
+                    )
+            lint_timeline_nested_component_contract(
+                issues=issues,
+                path=path,
+                text=text,
+                component_start=start,
+                component_label=component_label,
+                region_block=block,
+                top_level_blocks=top_level_blocks,
+            )
+
         minimum_children = region_schema.get("minimumChildren", {})
         if isinstance(minimum_children, dict):
             for child_keyword, minimum_count in sorted(minimum_children.items()):
                 if not isinstance(minimum_count, int):
                     continue
-                actual_children = len(find_immediate_component_blocks(block, child_keyword))
+                child_blocks = (
+                    find_region_column_blocks(region_type_key, block)
+                    if child_keyword == "column"
+                    else find_immediate_component_blocks(block, child_keyword)
+                )
+                actual_children = len(child_blocks)
                 if actual_children < minimum_count:
                     issues.append(
                         f"{display_path(path)}:{line_no(text, start)}: "
@@ -7719,16 +8302,25 @@ def lint_region_contracts(path: Path, text: str, schema: dict, validation_contex
 
         column_schema = region_schema.get("column")
         if isinstance(column_schema, dict):
-            for child_offset, column_identifier, column_block in find_immediate_component_blocks(block, "column"):
-                column_label = f"{component_label} column '{column_identifier}'"
+            for child_offset, column_identifier, column_block in find_region_column_blocks(region_type_key, block):
                 absolute_start = start + child_offset
                 column_props = extract_immediate_property_values(column_block)
+                column_name = next(
+                    (
+                        clean_scalar_value(prop_value)
+                        for prop_name, prop_value, _prop_offset in column_props
+                        if prop_name == "columnName"
+                    ),
+                    "",
+                )
+                column_label = f"{component_label} column '{column_identifier or column_name or '<unnamed>'}'"
                 allowed_props = set(column_schema.get("allowedProperties", []))
                 required_props = set(column_schema.get("requiredProperties", []))
                 present_props = {prop_name for prop_name, _prop_value, _prop_offset in column_props}
 
                 for prop_name, _prop_value, prop_offset in column_props:
-                    if allowed_props and prop_name not in allowed_props:
+                    forbidden_avatar_prop = region_type_key == "avatar" and prop_name in {"columnName", "show"}
+                    if forbidden_avatar_prop or (allowed_props and prop_name not in allowed_props):
                         issues.append(
                             f"{display_path(path)}:{line_no(text, absolute_start + prop_offset)}: "
                             f"DSL_RULE_PROP {column_label} {prop_name} is not allowed"
@@ -7749,7 +8341,7 @@ def lint_region_contracts(path: Path, text: str, schema: dict, validation_contex
                     column_label=column_label,
                     column_block=column_block,
                     column_top_level_blocks=column_top_level_blocks,
-                    require_layout_sequence=region_type_key in {"classicReport", "interactiveReport", "contentRow"},
+                    require_layout_sequence=region_type_key in {"avatar", "classicReport", "interactiveReport", "contentRow", "timeline"},
                 )
                 allowed_column_blocks = set(column_schema.get("allowedBlocks", []))
                 required_column_blocks = set(column_schema.get("requiredBlocks", []))
@@ -7855,7 +8447,7 @@ def lint_required_region_column_children(
     validation_context: dict[str, Any] | None = None,
 ) -> None:
     """Require compiler-visible child columns that fully cover source projections."""
-    actual_columns = len(find_immediate_component_blocks(region_block, "column"))
+    actual_columns = len(find_region_column_blocks(region_type_key, region_block))
     if region_type_key == "cards" and actual_columns > 0:
         issues.append(
             f"{display_path(path)}:{line_no(text, component_start)}: "
@@ -7876,11 +8468,11 @@ def lint_required_region_column_children(
         return
 
     if actual_columns == 0:
-        if region_type_key in {"contentRow", "metricCard"}:
+        if region_type_key in {"avatar", "badge", "contentRow", "metricCard", "timeline"}:
             issues.append(
                 f"{display_path(path)}:{line_no(text, component_start)}: "
                 f"DSL_RULE_REQUIRED {component_label} report display with data source must define immediate "
-                "column child block(s) using multiline layout.sequence and source.databaseColumn/source.dataType"
+                "column child block(s) using the component family's compiler-backed column contract"
             )
         else:
             issues.append(
@@ -7951,13 +8543,20 @@ def lint_column_block_shape(
         )
 
 
-def collect_content_row_sort_identifiers(region_block: str, sql_query_text: str | None) -> set[str]:
-    """Collect declared/projected Content Row identifiers that are valid static sort keys."""
+def collect_template_component_sort_identifiers(region_block: str, sql_query_text: str | None) -> set[str]:
+    """Collect declared/projected template-component identifiers that are valid static sort keys."""
     identifiers: set[str] = set()
 
-    for _child_offset, column_identifier, column_block in find_immediate_component_blocks(region_block, "column"):
+    for _child_offset, column_identifier, column_block in find_immediate_unnamed_component_blocks(region_block, "column"):
         if column_identifier:
             identifiers.add(normalize_sql_identifier(column_identifier))
+        direct_props = {
+            prop_name: (prop_value, prop_offset)
+            for prop_name, prop_value, prop_offset in extract_immediate_property_values(column_block)
+        }
+        column_name_meta = direct_props.get("columnName")
+        if column_name_meta:
+            identifiers.add(normalize_sql_identifier(column_name_meta[0]))
         column_top_level_blocks = extract_top_level_blocks(column_block)
         source_meta = column_top_level_blocks.get("source")
         if not source_meta:
@@ -7992,7 +8591,7 @@ def normalized_order_by_term_identifier(term: str) -> str | None:
     return normalize_sql_identifier(cleaned)
 
 
-def lint_content_row_order_by(
+def lint_template_component_order_by(
     *,
     issues: list[str],
     path: Path,
@@ -8002,7 +8601,7 @@ def lint_content_row_order_by(
     region_block: str,
     top_level_blocks: dict[str, tuple[int, str]],
 ) -> None:
-    """Validate Content Row SQL ordering uses the region-level orderBy block."""
+    """Validate report template-component SQL ordering uses the region-level orderBy block."""
     source_meta = top_level_blocks.get("source")
     if not source_meta:
         return
@@ -8086,7 +8685,7 @@ def lint_content_row_order_by(
             )
             return
 
-        sort_identifiers = collect_content_row_sort_identifiers(region_block, sql_query_text)
+        sort_identifiers = collect_template_component_sort_identifiers(region_block, sql_query_text)
         if not sort_identifiers:
             return
         for term in split_sql_top_level(order_by_clause, ","):
@@ -8094,7 +8693,7 @@ def lint_content_row_order_by(
             if identifier is None:
                 issues.append(
                     f"{display_path(path)}:{line_no(text, component_start + order_by_offset + order_by_clause_offset)}: "
-                    f"DSL_RULE_VALUE {component_label} orderBy.orderByClause must use declared Content Row column aliases; "
+                    f"DSL_RULE_VALUE {component_label} orderBy.orderByClause must use declared column aliases; "
                     f"raw sort expression '{term}' is not allowed"
                 )
                 continue
@@ -8157,6 +8756,704 @@ def lint_content_row_order_by(
             f"{display_path(path)}:{line_no(text, component_start + order_by_offset + item_offset + order_bys_offset)}: "
             f"DSL_RULE_REQUIRED {component_label} orderBy.item.orderBys must define at least one item value to ORDER BY mapping"
         )
+
+
+def split_top_level_sql_set_queries(sql_text: str) -> list[str]:
+    """Split UNION/INTERSECT/MINUS branches without splitting strings or nested queries."""
+    sql = strip_sql_comments(sql_text).strip().rstrip(";")
+    if not sql:
+        return []
+    parts: list[str] = []
+    part_start = 0
+    depth = 0
+    in_single_quote = False
+    in_double_quote = False
+    idx = 0
+    while idx < len(sql):
+        char = sql[idx]
+        next_char = sql[idx + 1] if idx + 1 < len(sql) else ""
+        if in_single_quote:
+            if char == "'" and next_char == "'":
+                idx += 2
+                continue
+            if char == "'":
+                in_single_quote = False
+            idx += 1
+            continue
+        if in_double_quote:
+            if char == '"':
+                in_double_quote = False
+            idx += 1
+            continue
+        if char == "'":
+            in_single_quote = True
+            idx += 1
+            continue
+        if char == '"':
+            in_double_quote = True
+            idx += 1
+            continue
+        if char == "(":
+            depth += 1
+            idx += 1
+            continue
+        if char == ")":
+            depth = max(depth - 1, 0)
+            idx += 1
+            continue
+        if depth == 0:
+            match = re.match(r"(?i)(union(?:\s+all)?|intersect|minus)\b", sql[idx:])
+            if match:
+                before = sql[idx - 1] if idx > 0 else " "
+                if not (before.isalnum() or before in "_$#"):
+                    part = sql[part_start:idx].strip()
+                    if part:
+                        parts.append(part)
+                    idx += match.end()
+                    part_start = idx
+                    continue
+        idx += 1
+    tail = sql[part_start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def strip_select_expression_alias(expression: str, expected_alias: str) -> str:
+    """Remove a simple trailing select-list alias from an expression."""
+    expr = expression.strip().rstrip(",")
+    as_alias = re.search(r'(?is)\s+as\s+("(?:[^"]+)"|[A-Za-z][A-Za-z0-9_$#]*)\s*$', expr)
+    if as_alias and normalize_sql_identifier(as_alias.group(1)) == normalize_sql_identifier(expected_alias):
+        return expr[: as_alias.start()].strip()
+    trailing_alias = re.search(r'(?is)\s+("?[A-Za-z][A-Za-z0-9_$#]*"?)\s*$', expr)
+    if trailing_alias and normalize_sql_identifier(trailing_alias.group(1)) == normalize_sql_identifier(expected_alias):
+        prefix = expr[: trailing_alias.start()].strip()
+        if prefix and not prefix.endswith("."):
+            return prefix
+    return expr
+
+
+def sql_projection_expressions(sql_text: str, alias: str) -> list[str] | None:
+    """Return the expression supplying one projection across every top-level set branch."""
+    branches = split_top_level_sql_set_queries(sql_text)
+    if not branches:
+        return None
+    select_lists: list[list[str]] = []
+    for branch in branches:
+        select_list = extract_top_level_select_list(branch)
+        if not select_list:
+            return None
+        select_lists.append(select_list)
+
+    target = normalize_sql_identifier(alias)
+    target_index = -1
+    for index, expression in enumerate(select_lists[0]):
+        identifier = extract_select_expression_identifier(expression)
+        if identifier and normalize_sql_identifier(identifier) == target:
+            target_index = index
+            break
+    if target_index < 0:
+        return None
+    if any(target_index >= len(select_list) for select_list in select_lists):
+        return None
+    return [strip_select_expression_alias(select_list[target_index], alias) for select_list in select_lists]
+
+
+def sql_string_literal_value(expression: str) -> str | None:
+    """Return an Oracle SQL string literal value when the whole expression is one literal."""
+    match = re.fullmatch(r"\s*'((?:''|[^'])*)'\s*", expression, re.DOTALL)
+    if not match:
+        return None
+    return match.group(1).replace("''", "'")
+
+
+def avatar_url_expression_is_safe(expression: str) -> bool:
+    """Prove an Avatar URL expression uses a canonical application-file SQL bind."""
+    cleaned = expression.strip()
+    if not cleaned:
+        return False
+    lowered = cleaned.lower()
+    if re.search(r"(?i)(?:javascript|data)\s*:", cleaned):
+        return False
+    if re.search(r"(?i)(?:^|['\"\s])//", cleaned):
+        return False
+    if re.search(r"(?i)\bhttps?\s*:", cleaned):
+        return False
+    case_match = re.fullmatch(r"(?is)case\b.*\bend", cleaned)
+    if case_match:
+        outputs = re.findall(r"(?is)\bthen\s+(.*?)(?=\s+when\b|\s+else\b|\s+end\b)", cleaned)
+        else_match = re.search(r"(?is)\belse\s+(.*?)(?=\s+end\b)", cleaned)
+        if else_match:
+            outputs.append(else_match.group(1))
+        return bool(outputs) and all(
+            output.strip().lower() == "null" or avatar_url_expression_is_safe(output)
+            for output in outputs
+        )
+
+    bind_match = AVATAR_URL_BIND_PATTERN.fullmatch(cleaned)
+    if not bind_match:
+        return False
+    relative_path = bind_match.group(2).replace("''", "'").strip()
+    if not relative_path or relative_path.startswith("/"):
+        return False
+    if "//" in relative_path or ":" in relative_path:
+        return False
+    if any(segment == ".." for segment in relative_path.split("/")):
+        return False
+    return not bool(re.search(r"[\x00-\x1f\x7f]", relative_path))
+
+
+def avatar_icon_expression_values(expression: str) -> list[str] | None:
+    """Return statically provable Avatar icon output values for a literal or CASE mapping."""
+    cleaned = expression.strip()
+    literal = sql_string_literal_value(cleaned)
+    if literal is not None:
+        return [literal]
+    if not re.fullmatch(r"(?is)case\b.*\bend", cleaned):
+        return None
+    outputs = re.findall(r"(?is)\bthen\s+(.*?)(?=\s+when\b|\s+else\b|\s+end\b)", cleaned)
+    else_match = re.search(r"(?is)\belse\s+(.*?)(?=\s+end\b)", cleaned)
+    if not else_match:
+        return None
+    outputs.append(else_match.group(1))
+    values: list[str] = []
+    for output in outputs:
+        value = sql_string_literal_value(output.strip())
+        if value is None:
+            return None
+        values.append(value)
+    return values or None
+
+
+def avatar_description_literal_is_human_readable(expression: str) -> bool:
+    """Return whether a static description projection is nonempty human-readable text."""
+    value = sql_string_literal_value(expression.strip())
+    if value is None:
+        return False
+    normalized = value.strip()
+    if not normalized or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", normalized):
+        return False
+    if re.match(r"(?i)^(?:javascript|data|https?):", normalized):
+        return False
+    if re.fullmatch(r"fa-[A-Za-z0-9_-]+", normalized):
+        return False
+    return True
+
+
+def avatar_comment_text(region_block: str) -> str:
+    """Return the standalone Avatar region's compiler-backed comments text."""
+    comments_meta = extract_top_level_blocks(region_block).get("comments")
+    if not comments_meta:
+        return ""
+    _comments_offset, comments_block = comments_meta
+    for prop_name, prop_value, _prop_offset in extract_immediate_brace_property_values(comments_block):
+        if prop_name == "comments":
+            return clean_scalar_value(prop_value)
+    return ""
+
+
+def avatar_comment_has_marker(comment_text: str, marker: str) -> bool:
+    """Return whether a semicolon/newline-delimited Avatar governance marker is present."""
+    return bool(re.search(rf"(?i)(?:^|[;\n])\s*{re.escape(marker)}\s*(?:;|$)", comment_text))
+
+
+def avatar_description_evidence_source(comment_text: str) -> str:
+    """Return the declared provenance for a dynamic Avatar description check."""
+    match = re.search(
+        r"(?i)(?:^|[;\n])\s*AVATAR_DESCRIPTION_EVIDENCE_SOURCE\s*=\s*([^;\n]+)",
+        comment_text,
+    )
+    return match.group(1).strip().lower() if match else ""
+
+
+def avatar_css_rationale(comment_text: str) -> str:
+    """Extract a nonempty Avatar CSS rationale from component comments."""
+    match = re.search(r"(?i)(?:^|[;\n])\s*AVATAR_CSS_RATIONALE\s*=\s*([^;\n]+)", comment_text)
+    return match.group(1).strip() if match else ""
+
+
+def lint_avatar_url_column_image_contract(
+    *,
+    issues: list[str],
+    path: Path,
+    text: str,
+    component_start: int,
+    component_label: str,
+    region_type_key: str,
+    region_block: str,
+    container_offset: int,
+    container_block: str,
+    property_path: str,
+) -> None:
+    """Enforce the shared application-managed URL-column contract for Avatar image payloads."""
+    image_object_meta = extract_property_object_block(container_block, "image")
+    if not image_object_meta:
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + container_offset)}: "
+            f"AVATAR_IMAGE_URL_COLUMN_REQUIRED_001 {component_label} {property_path} must be an object "
+            "using type: urlColumn and urlColumn"
+        )
+        return
+
+    image_offset, image_block = image_object_meta
+    image_props = {
+        prop_name: (clean_scalar_value(prop_value), prop_offset)
+        for prop_name, prop_value, prop_offset in extract_property_values(image_block)
+        if prop_name != "image"
+    }
+    for prop_name in sorted(set(image_props) - {"type", "urlColumn"}):
+        _prop_value, prop_offset = image_props[prop_name]
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + container_offset + image_offset + prop_offset)}: "
+            f"AVATAR_IMAGE_URL_COLUMN_REQUIRED_001 {component_label} {property_path}.{prop_name} is not allowed "
+            "by the proven URL-column image contract"
+        )
+
+    image_type_meta = image_props.get("type")
+    if not image_type_meta or image_type_meta[0] != "urlColumn":
+        error_offset = image_type_meta[1] if image_type_meta else 0
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + container_offset + image_offset + error_offset)}: "
+            f"AVATAR_IMAGE_URL_COLUMN_REQUIRED_001 {component_label} {property_path}.type must be urlColumn"
+        )
+    url_column_meta = image_props.get("urlColumn")
+    if not url_column_meta:
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + container_offset + image_offset)}: "
+            f"AVATAR_IMAGE_URL_COLUMN_REQUIRED_001 {component_label} {property_path} must define urlColumn"
+        )
+        return
+
+    url_column, url_column_offset = url_column_meta
+    if "{{" in url_column:
+        return
+
+    avatar_columns: dict[str, str] = {}
+    for _column_offset, _column_identifier, column_block in find_region_column_blocks(region_type_key, region_block):
+        source_meta = extract_top_level_blocks(column_block).get("source")
+        if not source_meta:
+            continue
+        _source_offset, source_block = source_meta
+        source_props = {
+            prop_name: clean_scalar_value(prop_value)
+            for prop_name, prop_value, _prop_offset in extract_immediate_brace_property_values(source_block)
+        }
+        database_column = source_props.get("databaseColumn", "")
+        if database_column:
+            avatar_columns[normalize_sql_identifier(database_column)] = source_props.get("dataType", "")
+
+    region_top_level_blocks = extract_top_level_blocks(region_block)
+    source_meta = region_top_level_blocks.get("source")
+    sql_query_text = ""
+    if source_meta:
+        _source_offset, source_block = source_meta
+        sql_query_text = extract_fenced_property_body(source_block, "sqlQuery") or ""
+
+    normalized_url_column = normalize_sql_identifier(url_column)
+    if normalized_url_column not in avatar_columns:
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + container_offset + image_offset + url_column_offset)}: "
+            f"AVATAR_IMAGE_URL_COLUMN_REQUIRED_001 {component_label} {property_path}.urlColumn '{url_column}' "
+            "must reference a declared Avatar child column"
+        )
+    elif avatar_columns[normalized_url_column].lower() != "varchar2":
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + container_offset + image_offset + url_column_offset)}: "
+            f"AVATAR_IMAGE_URL_COLUMN_REQUIRED_001 {component_label} {property_path}.urlColumn '{url_column}' "
+            "must reference a varchar2 Avatar child column"
+        )
+    else:
+        expressions = sql_projection_expressions(sql_query_text, url_column) if sql_query_text else None
+        if not expressions:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + container_offset + image_offset + url_column_offset)}: "
+                f"AVATAR_IMAGE_URL_SAFETY_REQUIRED_001 {component_label} cannot prove the rendered URL source for "
+                f"{property_path}.urlColumn '{url_column}'; use an explicit source.sqlQuery projection"
+            )
+        elif any(not avatar_url_expression_is_safe(expression) for expression in expressions):
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + container_offset + image_offset + url_column_offset)}: "
+                f"AVATAR_IMAGE_URL_SAFETY_REQUIRED_001 {component_label} {property_path}.urlColumn '{url_column}' "
+                "must use a canonical :APP_FILES or :APEX_FILES bind concatenated with one static relative path; "
+                "template/substitution tokens, BLOB endpoints, raw columns, traversal, javascript:, data:, "
+                "protocol-relative, and absolute external URLs are rejected"
+            )
+
+
+def lint_timeline_nested_component_contract(
+    *,
+    issues: list[str],
+    path: Path,
+    text: str,
+    component_start: int,
+    component_label: str,
+    region_block: str,
+    top_level_blocks: dict[str, tuple[int, str]],
+) -> None:
+    """Enforce Timeline's nested Avatar and Badge display contracts."""
+    settings_meta = top_level_blocks.get("settings")
+    if not settings_meta:
+        return
+
+    settings_offset, settings_block = settings_meta
+    settings_props = {
+        prop_name: (clean_scalar_value(prop_value), prop_offset)
+        for prop_name, prop_value, prop_offset in extract_immediate_brace_property_values(settings_block)
+    }
+
+    nested_contracts = (
+        ("displayAvatar", "plugin-avatar", "TIMELINE_AVATAR_BLOCK_REQUIRED_001"),
+        ("displayBadge", "plugin-badge", "TIMELINE_BADGE_BLOCK_REQUIRED_001"),
+    )
+    for setting_name, block_name, rule_id in nested_contracts:
+        setting_meta = settings_props.get(setting_name)
+        enabled = bool(setting_meta and normalize_value(setting_meta[0]) == "true")
+        block_meta = top_level_blocks.get(block_name)
+        if enabled and not block_meta:
+            setting_line_offset = settings_offset + (setting_meta[1] if setting_meta else 0)
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + setting_line_offset)}: "
+                f"{rule_id} {component_label} settings.{setting_name}: true requires {block_name}"
+            )
+        elif not enabled and block_meta:
+            block_offset, _block_text = block_meta
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + block_offset)}: "
+                f"{rule_id} {component_label} {block_name} requires settings.{setting_name}: true"
+            )
+
+    avatar_meta = top_level_blocks.get("plugin-avatar")
+    if not avatar_meta:
+        return
+
+    avatar_offset, avatar_block = avatar_meta
+    avatar_props = {
+        prop_name: (clean_scalar_value(prop_value), prop_offset)
+        for prop_name, prop_value, prop_offset in extract_immediate_brace_property_values(avatar_block)
+    }
+    type_meta = avatar_props.get("type")
+    if not type_meta:
+        return
+
+    avatar_type, type_offset = type_meta
+    if "{{" in avatar_type or avatar_type not in {"initials", "icon", "image"}:
+        return
+
+    payload_names = {"initials", "icon", "image"}
+    present_payloads = payload_names.intersection(avatar_props)
+    if avatar_type not in present_payloads:
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + avatar_offset + type_offset)}: "
+            f"TIMELINE_AVATAR_PAYLOAD_REQUIRED_001 {component_label} plugin-avatar.type: {avatar_type} "
+            f"requires plugin-avatar.{avatar_type}"
+        )
+
+    for payload_name in sorted(present_payloads - {avatar_type}):
+        _payload_value, payload_offset = avatar_props[payload_name]
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + avatar_offset + payload_offset)}: "
+            f"TIMELINE_AVATAR_PAYLOAD_REQUIRED_001 {component_label} plugin-avatar.{payload_name} must be omitted "
+            f"when type: {avatar_type}"
+        )
+
+    if avatar_type == "image":
+        lint_avatar_url_column_image_contract(
+            issues=issues,
+            path=path,
+            text=text,
+            component_start=component_start,
+            component_label=component_label,
+            region_type_key="timeline",
+            region_block=region_block,
+            container_offset=avatar_offset,
+            container_block=avatar_block,
+            property_path="plugin-avatar.image",
+        )
+
+
+def lint_avatar_settings_contract(
+    *,
+    issues: list[str],
+    path: Path,
+    text: str,
+    component_start: int,
+    component_label: str,
+    region_block: str,
+    settings_offset: int,
+    settings_block: str,
+    validation_context: dict[str, Any] | None = None,
+) -> None:
+    """Enforce the proven standalone Avatar type/payload and URL-column image shapes."""
+    settings_props = {
+        prop_name: (clean_scalar_value(prop_value), prop_offset)
+        for prop_name, prop_value, prop_offset in extract_immediate_brace_property_values(settings_block)
+    }
+    type_meta = settings_props.get("type")
+    if not type_meta:
+        return
+
+    avatar_type, type_offset = type_meta
+    if "{{" in avatar_type or avatar_type not in {"initials", "icon", "image"}:
+        return
+
+    payload_names = {"initials", "icon", "image"}
+    present_payloads = payload_names.intersection(settings_props)
+    if avatar_type not in present_payloads:
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + settings_offset + type_offset)}: "
+            f"AVATAR_TYPE_PAYLOAD_REQUIRED_001 {component_label} settings.type: {avatar_type} "
+            f"requires settings.{avatar_type}"
+        )
+
+    for payload_name in sorted(present_payloads - {avatar_type}):
+        _payload_value, payload_offset = settings_props[payload_name]
+        issues.append(
+            f"{display_path(path)}:{line_no(text, component_start + settings_offset + payload_offset)}: "
+            f"AVATAR_TYPE_PAYLOAD_REQUIRED_001 {component_label} settings.{payload_name} must be omitted "
+            f"when settings.type: {avatar_type}"
+        )
+
+    avatar_columns: dict[str, str] = {}
+    for _column_offset, _column_identifier, column_block in find_region_column_blocks("avatar", region_block):
+        source_meta = extract_top_level_blocks(column_block).get("source")
+        if not source_meta:
+            continue
+        _source_offset, source_block = source_meta
+        source_props = {
+            prop_name: clean_scalar_value(prop_value)
+            for prop_name, prop_value, _prop_offset in extract_immediate_brace_property_values(source_block)
+        }
+        database_column = source_props.get("databaseColumn", "")
+        if database_column:
+            avatar_columns[normalize_sql_identifier(database_column)] = source_props.get("dataType", "")
+
+    region_top_level_blocks = extract_top_level_blocks(region_block)
+    source_meta = region_top_level_blocks.get("source")
+    sql_query_text = ""
+    if source_meta:
+        _source_offset, source_block = source_meta
+        sql_query_text = extract_fenced_property_body(source_block, "sqlQuery") or ""
+
+    comment_text = avatar_comment_text(region_block)
+    security_meta = region_top_level_blocks.get("security")
+    if security_meta:
+        security_offset, security_block = security_meta
+        security_props = {
+            prop_name: (clean_scalar_value(prop_value), prop_offset)
+            for prop_name, prop_value, prop_offset in extract_immediate_brace_property_values(security_block)
+        }
+        authorization_meta = security_props.get("authorizationScheme")
+        if authorization_meta:
+            authorization_value, authorization_offset = authorization_meta
+            known_schemes = (validation_context or {}).get("authorization_schemes", set())
+            normalized_authorization = normalize_component_reference(authorization_value)
+            if authorization_value == "mustNotBePublicUser":
+                pass
+            elif not authorization_value.startswith("@") or normalized_authorization not in known_schemes:
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, component_start + security_offset + authorization_offset)}: "
+                    f"AVATAR_AUTHORIZATION_SCHEME_EVIDENCE_REQUIRED_001 {component_label} security.authorizationScheme "
+                    "must be mustNotBePublicUser or an @alias resolving to a declared shared authorization scheme"
+                )
+    decorative = avatar_comment_has_marker(comment_text, "AVATAR_PURPOSE_DECORATIVE")
+    description_meta = settings_props.get("description")
+    if not description_meta:
+        if not decorative:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + settings_offset)}: "
+                f"AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001 {component_label} meaningful initials, icon, and image "
+                "Avatars require settings.description; omit it only with the exact region comment marker "
+                "'AVATAR_PURPOSE_DECORATIVE'"
+            )
+    else:
+        description_value, description_offset = description_meta
+        if decorative:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + settings_offset + description_offset)}: "
+                f"AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001 {component_label} cannot combine settings.description "
+                "with the 'AVATAR_PURPOSE_DECORATIVE' marker"
+            )
+        elif "{{" not in description_value:
+            substitution = re.fullmatch(r"&([A-Z][A-Z0-9_]*)\.", description_value)
+            if substitution:
+                description_column = normalize_sql_identifier(substitution.group(1))
+                if description_column not in avatar_columns:
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, component_start + settings_offset + description_offset)}: "
+                        f"AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001 {component_label} settings.description "
+                        f"'{description_value}' must reference a declared Avatar child column"
+                    )
+                elif avatar_columns[description_column].lower() != "varchar2":
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, component_start + settings_offset + description_offset)}: "
+                        f"AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001 {component_label} settings.description "
+                        f"'{description_value}' must reference a varchar2 Avatar child column"
+                    )
+                else:
+                    expressions = (
+                        sql_projection_expressions(sql_query_text, substitution.group(1))
+                        if sql_query_text
+                        else None
+                    )
+                    evidence_source = avatar_description_evidence_source(comment_text)
+                    evidence_verified = evidence_source in {"schema_doc", "live_db", "user_asserted"}
+                    if not expressions:
+                        issues.append(
+                            f"{display_path(path)}:{line_no(text, component_start + settings_offset + description_offset)}: "
+                            f"AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001 {component_label} cannot prove the "
+                            f"settings.description source projection '{substitution.group(1)}'"
+                        )
+                    elif not all(avatar_description_literal_is_human_readable(expression) for expression in expressions) and not evidence_verified:
+                        issues.append(
+                            f"{display_path(path)}:{line_no(text, component_start + settings_offset + description_offset)}: "
+                            f"AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001 {component_label} dynamic description "
+                            "sources require provenance persisted as "
+                            "'AVATAR_DESCRIPTION_EVIDENCE_SOURCE=schema_doc', '=live_db', or '=user_asserted'"
+                        )
+            elif not description_value.strip() or re.search(r"(?:&[A-Za-z0-9_]+\.|#[A-Za-z0-9_$]+#)", description_value):
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, component_start + settings_offset + description_offset)}: "
+                    f"AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001 {component_label} settings.description must be "
+                    "nonempty human-readable text or one declared uppercase varchar2 column substitution"
+                )
+
+    css_meta = settings_props.get("cssClasses")
+    if css_meta and "{{" not in css_meta[0]:
+        css_value, css_offset = css_meta
+        rationale = avatar_css_rationale(comment_text)
+        if not rationale:
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + settings_offset + css_offset)}: "
+                f"AVATAR_CSS_CLASSES_SAFE_REQUIRED_001 {component_label} settings.cssClasses requires a nonempty "
+                "'AVATAR_CSS_RATIONALE=<reason>' entry in the region comments"
+            )
+        if re.search(r"(?:&[A-Za-z0-9_]+\.|#[A-Za-z0-9_$]+#|\{\{|\}\})", css_value):
+            issues.append(
+                f"{display_path(path)}:{line_no(text, component_start + settings_offset + css_offset)}: "
+                f"AVATAR_CSS_CLASSES_SAFE_REQUIRED_001 {component_label} settings.cssClasses must be static and "
+                "must not contain substitutions"
+            )
+        else:
+            framework_approved = avatar_comment_has_marker(
+                comment_text,
+                "AVATAR_FRAMEWORK_UTILITIES_EXPLICIT_REQUEST",
+            )
+            for css_class in css_value.split():
+                if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", css_class):
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, component_start + settings_offset + css_offset)}: "
+                        f"AVATAR_CSS_CLASSES_SAFE_REQUIRED_001 {component_label} settings.cssClasses contains "
+                        f"invalid static class '{css_class}'"
+                    )
+                    continue
+                if any(pattern.search(css_class.lower()) for pattern in AVATAR_CSS_ALWAYS_FORBIDDEN_PATTERNS):
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, component_start + settings_offset + css_offset)}: "
+                        f"AVATAR_CSS_CLASSES_SAFE_REQUIRED_001 {component_label} settings.cssClasses must not use "
+                        f"visibility-changing class '{css_class}'"
+                    )
+                    continue
+                if css_class.startswith(AVATAR_CSS_FRAMEWORK_PREFIXES):
+                    if not framework_approved:
+                        issues.append(
+                            f"{display_path(path)}:{line_no(text, component_start + settings_offset + css_offset)}: "
+                            f"AVATAR_CSS_CLASSES_SAFE_REQUIRED_001 {component_label} framework class '{css_class}' "
+                            "requires the exact comment marker 'AVATAR_FRAMEWORK_UTILITIES_EXPLICIT_REQUEST'"
+                        )
+                elif not css_class.startswith("avatar-"):
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, component_start + settings_offset + css_offset)}: "
+                        f"AVATAR_CSS_CLASSES_SAFE_REQUIRED_001 {component_label} custom class '{css_class}' must use "
+                        "the component-scoped 'avatar-' prefix"
+                    )
+
+    if avatar_type == "initials" and "initials" in settings_props:
+        initials_value, initials_offset = settings_props["initials"]
+        if "{{" not in initials_value:
+            substitution_match = re.fullmatch(r"&([A-Z][A-Z0-9_]*)\.", initials_value)
+            suggested_column = substitution_match.group(1) if substitution_match else initials_value
+            normalized_initials = normalize_sql_identifier(initials_value)
+            if not component_identifier_is_live_external(initials_value):
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, component_start + settings_offset + initials_offset)}: "
+                    f"AVATAR_INITIALS_COLUMN_REFERENCE_REQUIRED_001 {component_label} settings.initials "
+                    f"must use the direct source-column identifier {suggested_column}, not substitution syntax"
+                )
+            elif normalized_initials not in avatar_columns:
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, component_start + settings_offset + initials_offset)}: "
+                    f"AVATAR_INITIALS_COLUMN_REFERENCE_REQUIRED_001 {component_label} settings.initials "
+                    f"'{initials_value}' must reference a declared Avatar child column"
+                )
+            elif avatar_columns[normalized_initials].lower() != "varchar2":
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, component_start + settings_offset + initials_offset)}: "
+                    f"AVATAR_INITIALS_COLUMN_REFERENCE_REQUIRED_001 {component_label} settings.initials "
+                    f"'{initials_value}' must reference a varchar2 Avatar child column"
+                )
+
+    if avatar_type == "icon" and "icon" in settings_props:
+        icon_value, icon_offset = settings_props["icon"]
+        if "{{" not in icon_value:
+            substitution = re.fullmatch(r"&([A-Z][A-Z0-9_]*)\.", icon_value)
+            if substitution:
+                icon_column_name = substitution.group(1)
+                normalized_icon_column = normalize_sql_identifier(icon_column_name)
+                if normalized_icon_column not in avatar_columns:
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, component_start + settings_offset + icon_offset)}: "
+                        f"AVATAR_ICON_ALLOWLIST_REQUIRED_001 {component_label} settings.icon '{icon_value}' must "
+                        "reference a declared Avatar child column"
+                    )
+                elif avatar_columns[normalized_icon_column].lower() != "varchar2":
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, component_start + settings_offset + icon_offset)}: "
+                        f"AVATAR_ICON_ALLOWLIST_REQUIRED_001 {component_label} settings.icon '{icon_value}' must "
+                        "reference a varchar2 Avatar child column"
+                    )
+                else:
+                    expressions = sql_projection_expressions(sql_query_text, icon_column_name) if sql_query_text else None
+                    values: list[str] = []
+                    if expressions:
+                        for expression in expressions:
+                            expression_values = avatar_icon_expression_values(expression)
+                            if not expression_values:
+                                values = []
+                                break
+                            values.extend(expression_values)
+                    if not expressions or not values:
+                        issues.append(
+                            f"{display_path(path)}:{line_no(text, component_start + settings_offset + icon_offset)}: "
+                            f"AVATAR_ICON_ALLOWLIST_REQUIRED_001 {component_label} column-backed icons require "
+                            "statically verified Font APEX literals or an explicit CASE mapping in source.sqlQuery"
+                        )
+                    else:
+                        invalid_values = sorted({value for value in values if not value_is_fa_icon(value)})
+                        if invalid_values:
+                            issues.append(
+                                f"{display_path(path)}:{line_no(text, component_start + settings_offset + icon_offset)}: "
+                                f"AVATAR_ICON_ALLOWLIST_REQUIRED_001 {component_label} source icon value(s) "
+                                f"{', '.join(invalid_values)} must each contain exactly one icon and only optional "
+                                "modifiers from the canonical Font APEX index"
+                            )
+            # Static literals are enforced globally by FA_ICON_REQUIRED_001. Avatar-specific
+            # validation above closes the gap for column substitutions and every CASE output.
+
+    if avatar_type != "image":
+        return
+
+    lint_avatar_url_column_image_contract(
+        issues=issues,
+        path=path,
+        text=text,
+        component_start=component_start,
+        component_label=component_label,
+        region_type_key="avatar",
+        region_block=region_block,
+        container_offset=settings_offset,
+        container_block=settings_block,
+        property_path="settings.image",
+    )
 
 
 def find_property_object_blocks(block: str, prop_name: str) -> list[tuple[int, str]]:
@@ -8244,6 +9541,7 @@ def lint_region_actions(
     required_action_props = set(action_schema.get("requiredProperties", []))
     allowed_action_blocks = set(action_schema.get("allowedBlocks", []))
     required_action_blocks = set(action_schema.get("requiredBlocks", []))
+    action_property_enums = action_schema.get("propertyEnums", {})
     menu_schema = action_schema.get("menu", {})
 
     for action_offset, action_identifier, action_block in find_immediate_component_blocks(region_block, "action"):
@@ -8264,6 +9562,20 @@ def lint_region_actions(
                 f"{display_path(path)}:{line_no(text, absolute_action_start)}: "
                 f"DSL_RULE_REQUIRED {action_label} must define {prop_name}"
             )
+
+        if isinstance(action_property_enums, dict):
+            for prop_name, allowed_values in action_property_enums.items():
+                if not isinstance(allowed_values, list) or not allowed_values:
+                    continue
+                allowed_normalized = {normalize_value(str(value)) for value in allowed_values}
+                for actual_name, actual_value, prop_offset in action_props:
+                    if actual_name != prop_name or normalize_value(actual_value) in allowed_normalized:
+                        continue
+                    issues.append(
+                        f"{display_path(path)}:{line_no(text, absolute_action_start + prop_offset)}: "
+                        f"DSL_RULE_ENUM {action_label} action.{prop_name} must be one of: "
+                        + ", ".join(str(value) for value in allowed_values)
+                    )
 
         action_top_level_blocks = extract_top_level_blocks(action_block)
         for block_name in sorted(required_action_blocks - set(action_top_level_blocks.keys())):
@@ -8525,7 +9837,7 @@ def lint_region_contract(path: Path, text: str, schema: dict) -> list[str]:
             )
 
         if region_type_key == "contentRow":
-            lint_content_row_order_by(
+            lint_template_component_order_by(
                 issues=issues,
                 path=path,
                 text=text,
@@ -9297,13 +10609,42 @@ def lint_filter_and_facet_identifier_contract(path: Path, text: str) -> list[str
     return issues
 
 
-def lint_content_row_action_layout_sequence_contract(path: Path, text: str) -> list[str]:
-    """Require live-compiler action layout sequencing for content-row template components."""
+def lint_avatar_column_identifier_contract(path: Path, text: str) -> list[str]:
+    """Require standalone Avatar column identifiers accepted by the live compiler."""
     issues: list[str] = []
 
     for page_start, page_name, page_block in find_component_blocks(text, "page"):
         for region_offset, region_name, region_block in find_immediate_component_blocks(page_block, "region"):
-            if extract_item_type(region_block) != "themeTemplateComponent/contentRow":
+            if extract_item_type(region_block) != "themeTemplateComponent/avatar":
+                continue
+
+            for column_offset, column_identifier, _column_block in find_region_column_blocks("avatar", region_block):
+                if component_identifier_is_live_external(column_identifier):
+                    continue
+                issues.append(
+                    f"{display_path(path)}:{line_no(text, page_start + region_offset + column_offset)}: "
+                    f"AVATAR_COLUMN_IDENTIFIER_INVALID_001 page '{page_name}' Avatar region '{region_name}' "
+                    f"column identifier '{column_identifier}' must be uppercase snake_case such as "
+                    "AVATAR_INITIALS; live compiler rejects lower-case and hyphenated external identifiers"
+                )
+
+    return issues
+
+
+def lint_template_component_action_layout_sequence_contract(path: Path, text: str) -> list[str]:
+    """Require live-compiler action layout sequencing for supported template components."""
+    issues: list[str] = []
+
+    for page_start, page_name, page_block in find_component_blocks(text, "page"):
+        for region_offset, region_name, region_block in find_immediate_component_blocks(page_block, "region"):
+            region_type = extract_item_type(region_block)
+            if region_type == "themeTemplateComponent/contentRow":
+                rule_id = "CONTENT_ROW_ACTION_LAYOUT_SEQUENCE_REQUIRED_001"
+                component_label = "contentRow"
+            elif region_type == "themeTemplateComponent/badge":
+                rule_id = "BADGE_ACTION_LAYOUT_SEQUENCE_REQUIRED_001"
+                component_label = "Badge"
+            else:
                 continue
             for action_offset, action_name, action_block in find_immediate_component_blocks(region_block, "action"):
                 action_start = page_start + region_offset + action_offset
@@ -9312,7 +10653,7 @@ def lint_content_row_action_layout_sequence_contract(path: Path, text: str) -> l
                 if not layout_meta:
                     issues.append(
                         f"{display_path(path)}:{line_no(text, action_start)}: "
-                        f"CONTENT_ROW_ACTION_LAYOUT_SEQUENCE_REQUIRED_001 page '{page_name}' contentRow region "
+                        f"{rule_id} page '{page_name}' {component_label} region "
                         f"'{region_name}' action '{action_name}' must define layout.sequence; live compiler "
                         "requires component layout sequence for region actions"
                     )
@@ -9325,7 +10666,7 @@ def lint_content_row_action_layout_sequence_contract(path: Path, text: str) -> l
                 if "sequence" not in layout_props:
                     issues.append(
                         f"{display_path(path)}:{line_no(text, action_start + layout_offset)}: "
-                        f"CONTENT_ROW_ACTION_LAYOUT_SEQUENCE_REQUIRED_001 page '{page_name}' contentRow region "
+                        f"{rule_id} page '{page_name}' {component_label} region "
                         f"'{region_name}' action '{action_name}' layout block must define sequence"
                     )
 
@@ -10010,14 +11351,50 @@ def _lint_multiline_structure_segment(path: Path, full_text: str, segment_text: 
     return issues
 
 
-def value_is_fa_icon(value: str) -> bool:
-    """Return whether an icon literal uses Font APEX fa classes."""
+def load_font_apex_icon_index() -> tuple[set[str], set[str]]:
+    """Load the pinned Font APEX 26.1 icon and modifier inventories once."""
+    global _FONT_APEX_ICON_INDEX
+    if _FONT_APEX_ICON_INDEX is not None:
+        return _FONT_APEX_ICON_INDEX
+    try:
+        payload = json.loads(FONT_APEX_ICON_INDEX_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Unable to load Font APEX icon index {FONT_APEX_ICON_INDEX_PATH}: {error}") from error
+    if (
+        not isinstance(payload, dict)
+        or payload.get("apex_version") != "26.1"
+        or not isinstance(payload.get("icons"), list)
+        or not isinstance(payload.get("modifiers"), list)
+        or not all(isinstance(item, str) for item in [*payload["icons"], *payload["modifiers"]])
+    ):
+        raise RuntimeError(f"Invalid Font APEX icon index: {FONT_APEX_ICON_INDEX_PATH}")
+    _FONT_APEX_ICON_INDEX = (set(payload["icons"]), set(payload["modifiers"]))
+    return _FONT_APEX_ICON_INDEX
+
+
+def classify_fa_icon_value(value: str) -> str:
+    """Classify an icon property as valid, unresolved, or invalid against the pinned catalog."""
     cleaned = clean_scalar_value(value)
-    if not cleaned or "{{" in cleaned or "}}" in cleaned or cleaned.startswith("&"):
-        return True
-    if re.search(r"\bfa-[A-Za-z0-9_-]+\b", cleaned):
-        return True
-    return False
+    if "{{" in cleaned or "}}" in cleaned or cleaned.startswith("&") or SUBSTITUTION_TOKEN_PATTERN.search(cleaned):
+        return "unresolved"
+    if not cleaned:
+        return "invalid"
+    icons, modifiers = load_font_apex_icon_index()
+    tokens = cleaned.split()
+    selected_icons = [token for token in tokens if token in icons]
+    selected_modifiers = [token for token in tokens if token in modifiers]
+    is_valid = (
+        len(selected_icons) == 1
+        and tokens.count("fa") <= 1
+        and len(selected_modifiers) == len(set(selected_modifiers))
+        and all(token == "fa" or token in icons or token in modifiers for token in tokens)
+    )
+    return "valid" if is_valid else "invalid"
+
+
+def value_is_fa_icon(value: str) -> bool:
+    """Return whether an icon is valid or intentionally unresolved for a dynamic-capable property."""
+    return classify_fa_icon_value(value) != "invalid"
 
 
 def lint_fa_icon_literals(path: Path, text: str) -> list[str]:
@@ -10031,7 +11408,8 @@ def lint_fa_icon_literals(path: Path, text: str) -> list[str]:
             continue
         issues.append(
             f"{display_path(path)}:{line_no(text, prop_offset)}: "
-            f"FA_ICON_REQUIRED_001 icon property '{prop_name}' must use a Font APEX fa-* icon class; "
+            f"FA_ICON_REQUIRED_001 icon property '{prop_name}' must use exactly one catalog-listed Font APEX icon "
+            "with optional catalog-listed modifiers; "
             f"found '{cleaned}'"
         )
     return issues
@@ -10470,6 +11848,7 @@ def lint_calendar_template_contract(ctx: LintContext) -> list[str]:
 APX_STRUCTURE_AND_FORMAT_LINTERS: list[LintRunner] = [
     _ctx_path_text_lint(lint_apx_line_endings),
     _ctx_path_text_lint(lint_page_filename_identity_contract),
+    _ctx_path_text_lint(lint_page_direct_property_contract),
     _ctx_path_text_lint(lint_layout_scopes),
     _ctx_path_text_lint(lint_stale_template_option_values),
     _ctx_path_text_lint(lint_dashboard_layout_contracts),
@@ -10525,7 +11904,8 @@ APX_SECURITY_SQL_AND_FORM_LINTERS: list[LintRunner] = [
     _ctx_path_text_lint(lint_report_region_link_block_live_contract),
     _ctx_path_text_lint(lint_interactive_report_column_live_metadata),
     _ctx_path_text_lint(lint_filter_and_facet_identifier_contract),
-    _ctx_path_text_lint(lint_content_row_action_layout_sequence_contract),
+    _ctx_path_text_lint(lint_avatar_column_identifier_contract),
+    _ctx_path_text_lint(lint_template_component_action_layout_sequence_contract),
     _ctx_path_text_lint(lint_list_region_live_template_contract),
     _ctx_path_text_lint(lint_interactive_report_saved_report_live_contract),
     _ctx_path_text_lint(lint_invoke_api_parameter_expression_contract),

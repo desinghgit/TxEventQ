@@ -41,14 +41,15 @@ The following document outlines the discrete skills & workflows included or bein
 
 ## Template Components
 ### Included
-- Content Row
-
-### Not Included
-- Timeline
-- Media List
-- Badge
-- Comments
 - Avatar
+- Badge
+- Content Row
+- Timeline
+
+
+### Not Included / Fully Ready
+- Media List
+- Comments
 - Metric Card
 
 ## Page Items

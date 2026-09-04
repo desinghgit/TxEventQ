@@ -46,7 +46,7 @@
       {
         "id": "database-evidence",
         "rule_ids": ["DB_MODE_PROMPT_REQUIRED_001", "DB_CONN_REQUIRED_001", "DB_OBJECT_EVIDENCE_REQUIRED_001", "DB_METADATA_REQUIRED_REPORT_001", "DB_VERIFY_BEFORE_GENERATION_001"],
-        "profile_ids": ["interactive-report", "classic-report", "form", "faceted-search"],
+        "profile_ids": ["interactive-report", "classic-report", "standalone-avatar", "form", "faceted-search"],
         "enforcement_paths": ["tools/apexctl.mjs", "references/ops/sqlcl.md", "references/workflows/apex-generation/agents/20-agent-draft.md", "references/workflows/apex-generation/agents/30-agent-critique.md"],
         "source_sections": [
           {"heading": "DB Metadata Prerequisite Gate (NON-NEGOTIABLE)", "instruction_count": 49, "instruction_digest": "cca8061238d3156def2a38d6900f7a9821ae74f8f78cdc7c86806c7bf0cdd3ea"},
@@ -156,7 +156,7 @@
     {
       "id": "buttons",
       "keywords": ["button", "redirect button", "submit button", "button icon", "text with icon", "button action"],
-      "rule_ids": ["BUTTON_ICON_POSITION_DEFAULT_001", "BUTTON_BEHAVIOR_TARGET_CONTRACT_001", "TEMPLATE_OPTIONS_EMITTED_VALUES_001", "FA_ICON_REQUIRED_001", "PAGE_ACTION_BREADCRUMB_REQUIRED_001"],
+      "rule_ids": ["BUTTON_ICON_POSITION_DEFAULT_001", "BUTTON_BEHAVIOR_TARGET_CONTRACT_001", "TEMPLATE_OPTIONS_EMITTED_VALUES_001", "PAGE_ACTION_BREADCRUMB_REQUIRED_001"],
       "directives": [
         "Select the exact button behavior variant before drafting.",
         "Use declarative targets for redirects and canonical Font APEX/template-option values."
@@ -173,6 +173,13 @@
         {"keywords": ["submit"], "path": "templates/buttons/buttons.submit.md", "sections": ["Output Template", "Example"]},
         {"keywords": ["icon", "text with icon"], "path": "templates/buttons/buttons.appearance-icon.md", "sections": ["Output Template", "Example", "Rules"]}
       ]
+    },
+    {
+      "id": "icons",
+      "keywords": ["icon", "icons", "icon-only", "icon css class", "icon property", "image icon css classes", "appearance.icon", "font apex", "fa-", "checkmark", "glyph", "pictogram"],
+      "rule_ids": ["FA_ICON_REQUIRED_001"],
+      "directives": ["Load the pinned Font APEX index only when an icon is required, then select exactly one icon token, at most one optional fa base class, and unique optional catalog-listed modifiers."],
+      "guidance_paths": []
     },
     {
       "id": "interactive-report",
@@ -198,6 +205,34 @@
       "guidance_paths": ["references/policies/memory-bank/30-pages/apex.classic-report.md"],
       "template_projections": [
         {"path": "templates/region-components/classic-report/classic-report._common.md", "sections": ["Generation Rules", "Conditional Rendering Rules", "Guardrails"]}
+      ]
+    },
+    {
+      "id": "standalone-avatar",
+      "component_ids": ["standalone-avatar"],
+      "keywords": ["standalone avatar", "standalone avatar region", "avatar region", "avatar report", "avatar report region", "avatar template component", "theme template component avatar", "themetemplatecomponent avatar"],
+      "rule_ids": ["AVATAR_TYPE_PAYLOAD_REQUIRED_001", "AVATAR_INITIALS_COLUMN_REFERENCE_REQUIRED_001", "AVATAR_IMAGE_URL_COLUMN_REQUIRED_001", "AVATAR_IMAGE_URL_SAFETY_REQUIRED_001", "AVATAR_ICON_ALLOWLIST_REQUIRED_001", "AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001", "AVATAR_CSS_CLASSES_SAFE_REQUIRED_001", "AVATAR_COLUMN_IDENTIFIER_INVALID_001", "AVATAR_AUTHORIZATION_SCHEME_EVIDENCE_REQUIRED_001", "DB_OBJECT_EVIDENCE_REQUIRED_001"],
+      "directives": [
+        "Use the standalone themeTemplateComponent/avatar family rather than Classic Report or Interactive Report templates.",
+        "Select exactly one proven report scenario: initials, Font APEX icon, or URL-column image.",
+        "For initials, emit settings.initials as the direct uppercase source-column identifier without ampersand substitution syntax; free-text description may use `&COLUMN_NAME.`.",
+        "Declare every projection as a named template-component column using an uppercase snake_case external identifier plus source.databaseColumn and source.dataType; do not emit lowercase or hyphenated identifiers, columnName, or show properties.",
+        "Require a verified human-readable description for meaningful Avatars and record dynamic-source provenance as schema_doc, live_db, or user_asserted; decorative templates omit both description property and column.",
+        "For URL-column images, use canonical :APP_FILES or :APEX_FILES SQL bind concatenation with a static relative path; reject template/substitution tokens, AUTHENTICATED_URL_PREFIX, BLOB endpoints, traversal, raw, external, protocol-relative, javascript:, and data: sources.",
+        "Validate Avatar icon literals and source mappings against the canonical build-pinned Font APEX index; require exactly one icon and only optional catalog-listed modifiers.",
+        "Keep Avatar cssClasses static and component-scoped, require a comments rationale, and require explicit-request evidence for framework utilities.",
+        "When access is restricted, use mustNotBePublicUser or an @alias resolving to a declared shared authorization scheme in the validation set; never invent authorization names.",
+        "Do not apply an action template because the Avatar theme export declares actionTemplates: [].",
+        "Do not infer BLOB images, grouping, link actions, or partial mode until their standalone contracts are proven."
+      ],
+      "guidance_paths": ["references/policies/memory-bank/10-global/apex.global.md", "references/policies/memory-bank/40-components/apex.templates.md", "references/policies/memory-bank/40-components/apex.region-data-source.md"],
+      "template_projections": [
+        {"path": "templates/template-components/avatar/avatar._common.md", "sections": ["Generation Rules", "Variable Contract", "Conditional Rendering Rules", "Validation Checklist"]}
+      ],
+      "template_routes": [
+        {"keywords": ["initials", "initials avatar"], "path": "templates/template-components/avatar/avatar.report-initials.md", "sections": ["Output Template", "Conditional Rendering Rules", "Validation Checklist"]},
+        {"keywords": ["icon", "icon avatar", "font apex icon"], "path": "templates/template-components/avatar/avatar.report-icon.md", "sections": ["Output Template", "Conditional Rendering Rules", "Validation Checklist"]},
+        {"keywords": ["image", "image avatar", "url column", "url-column image"], "path": "templates/template-components/avatar/avatar.report-image-url-column.md", "sections": ["Output Template", "Conditional Rendering Rules", "Validation Checklist"]}
       ]
     },
     {
@@ -246,7 +281,7 @@
     {
       "id": "cards",
       "keywords": ["cards", "cards region", "card navigation", "card media"],
-      "rule_ids": ["TEMPLATE_OPTIONS_EMITTED_VALUES_001", "FA_ICON_REQUIRED_001"],
+      "rule_ids": ["TEMPLATE_OPTIONS_EMITTED_VALUES_001"],
       "directives": ["Select standard versus REST source, media shape, row action, advanced formatting, and exact template-option values before rendering."],
       "guidance_paths": ["references/policies/memory-bank/40-components/apex.templates.md", "references/policies/memory-bank/40-components/apex.region-data-source.md"],
       "template_projections": [
@@ -296,6 +331,132 @@
     }
   ],
   "rules": [
+    {
+      "rule_id": "AVATAR_AUTHORIZATION_SCHEME_EVIDENCE_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar._common.md",
+      "applies_to": ["standalone avatar authorization", "restricted avatar region", "avatar AuthZ"],
+      "summary": "Restricted standalone Avatar regions use mustNotBePublicUser or an @alias resolving to a declared shared authorization scheme and never substitute visual hiding for access control.",
+      "phases": ["planning", "generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar"],
+      "stop_behavior": "Stop with Missing Inputs when restricted access is required but the exact shared authorization scheme cannot be resolved.",
+      "required_load_when": ["restricted standalone avatar", "avatar authorization", "avatar security"],
+      "enforced_by": ["references/workflows/apex-generation/agents/30-agent-critique.md"],
+      "details_doc": "templates/template-components/avatar/avatar._common.md",
+      "examples_doc": "templates/template-components/avatar/README.md"
+    },
+    {
+      "rule_id": "AVATAR_COLUMN_IDENTIFIER_INVALID_001",
+      "owner": "templates/template-components/avatar/avatar._common.md",
+      "applies_to": ["standalone avatar columns", "avatar child column identifiers"],
+      "summary": "Standalone Avatar child columns use uppercase snake_case external identifiers and preserve explicit source.databaseColumn mappings.",
+      "phases": ["generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar"],
+      "stop_behavior": "Reject lowercase or hyphenated Avatar child-column identifiers that the live compiler cannot accept.",
+      "required_load_when": ["standalone avatar generation", "avatar column validation"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar._common.md",
+      "examples_doc": "templates/template-components/avatar/README.md"
+    },
+    {
+      "rule_id": "AVATAR_INITIALS_COLUMN_REFERENCE_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar.report-initials.md",
+      "applies_to": ["standalone avatar initials", "avatar initials column reference"],
+      "summary": "Standalone Avatar initials use a direct uppercase source-column identifier that resolves to a declared varchar2 Avatar child column, without substitution syntax.",
+      "phases": ["generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar"],
+      "stop_behavior": "Reject substitution syntax, undeclared initials columns, and non-varchar2 initials mappings.",
+      "required_load_when": ["standalone avatar initials generation", "avatar initials validation"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar.report-initials.md",
+      "examples_doc": "templates/template-components/avatar/avatar.report-initials.md"
+    },
+    {
+      "rule_id": "AVATAR_TYPE_PAYLOAD_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar._common.md",
+      "applies_to": ["standalone avatar", "avatar report region", "theme template component avatar"],
+      "summary": "Standalone Avatar settings select exactly one initials, icon, or image type and emit only that type's required payload.",
+      "phases": ["generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar"],
+      "stop_behavior": "Reject missing, mixed, or inactive Avatar payload properties.",
+      "required_load_when": ["standalone avatar generation", "avatar validation"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar._common.md",
+      "examples_doc": "templates/template-components/avatar/avatar.report-initials.md"
+    },
+    {
+      "rule_id": "AVATAR_IMAGE_URL_COLUMN_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar.report-image-url-column.md",
+      "applies_to": ["standalone avatar image", "Timeline nested avatar image", "Timeline avatar image", "avatar URL column image"],
+      "summary": "Standalone and Timeline-nested Avatar images use an image object with type urlColumn and a projected urlColumn value.",
+      "phases": ["generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar", "timeline"],
+      "stop_behavior": "Reject unproven BLOB or alternate standalone Avatar image structures.",
+      "required_load_when": ["standalone avatar image generation", "Timeline avatar image generation", "avatar image validation"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar.report-image-url-column.md",
+      "examples_doc": "templates/template-components/avatar/avatar.report-image-url-column.md"
+    },
+    {
+      "rule_id": "AVATAR_IMAGE_URL_SAFETY_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar.report-image-url-column.md",
+      "applies_to": ["standalone avatar image URL", "Timeline nested avatar image URL", "Timeline avatar image", "avatar URL-column security", "avatar external image URL"],
+      "summary": "Avatar URL-column images use canonical :APP_FILES or :APEX_FILES SQL bind concatenation with a static relative path, never arbitrary rendered URL values.",
+      "phases": ["planning", "generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar", "timeline"],
+      "stop_behavior": "Reject template/substitution tokens, AUTHENTICATED_URL_PREFIX, BLOB endpoints, traversal, raw URL columns, javascript:, data:, protocol-relative URLs, and absolute external URLs.",
+      "required_load_when": ["standalone avatar image generation", "Timeline avatar image generation", "avatar image URL security", "avatar image validation"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar.report-image-url-column.md",
+      "examples_doc": "templates/template-components/avatar/avatar.report-image-url-column.md"
+    },
+    {
+      "rule_id": "AVATAR_ICON_ALLOWLIST_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar.report-icon.md",
+      "applies_to": ["standalone avatar icon", "Font APEX avatar icon", "avatar icon source mapping"],
+      "summary": "Avatar icon values resolve to exactly one icon and only optional modifiers from the canonical build-pinned Font APEX index, including every output of a column-backed CASE mapping.",
+      "phases": ["planning", "generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar"],
+      "stop_behavior": "Reject unknown icons or modifiers, multiple-icon payloads, arbitrary classes, raw icon columns, and unverified dynamic icon expressions.",
+      "required_load_when": ["standalone avatar icon generation", "Font APEX avatar icon", "avatar icon validation"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar.report-icon.md",
+      "examples_doc": "templates/template-components/avatar/avatar.report-icon.md"
+    },
+    {
+      "rule_id": "AVATAR_ACCESSIBLE_DESCRIPTION_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar._common.md",
+      "applies_to": ["standalone avatar accessibility", "avatar description", "decorative avatar"],
+      "summary": "Meaningful Avatars have a verified human-readable description with provenance for dynamic sources; decorative regions omit both the description setting and child column.",
+      "phases": ["planning", "generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar"],
+      "stop_behavior": "Reject missing, undeclared, non-varchar2, or unverified dynamic descriptions unless the exact decorative-purpose marker is present; reject contradictory decorative-plus-description declarations.",
+      "required_load_when": ["standalone avatar generation", "avatar accessibility", "decorative avatar"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar._common.md",
+      "examples_doc": "templates/template-components/avatar/README.md"
+    },
+    {
+      "rule_id": "AVATAR_CSS_CLASSES_SAFE_REQUIRED_001",
+      "owner": "templates/template-components/avatar/avatar._common.md",
+      "applies_to": ["standalone avatar CSS classes", "avatar custom CSS", "avatar framework utility class"],
+      "summary": "Avatar cssClasses are static, component-scoped, documented, and cannot silently introduce dynamic or visibility-changing behavior.",
+      "phases": ["planning", "generation", "validation", "repair"],
+      "profile_ids": ["standalone-avatar"],
+      "component_ids": ["standalone-avatar"],
+      "stop_behavior": "Reject substitutions, invalid or unscoped custom classes, visibility-changing classes, undocumented CSS, and framework utilities lacking explicit-request evidence.",
+      "required_load_when": ["avatar cssClasses", "avatar custom CSS", "standalone avatar styling"],
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/avatar/avatar._common.md",
+      "examples_doc": "templates/template-components/avatar/README.md"
+    },
     {
       "rule_id": "GRAMMAR_FIRST_AUTHORITY_REQUIRED_001",
       "owner": "references/policies/memory-bank/00-guard/ai.guard.md",
@@ -671,6 +832,19 @@
       "examples_doc": "templates/buttons/buttons._common.md"
     },
     {
+      "rule_id": "FA_ICON_REQUIRED_001",
+      "owner": "runtime/internal/python/validate_apexlang.py",
+      "applies_to": ["icon-bearing property", "icon CSS class", "Font APEX icon", "fa-* token"],
+      "summary": "Icon-bearing properties must use exactly one pinned Font APEX catalogue icon, at most one optional fa base class, and unique catalogue-listed modifiers.",
+      "directives": ["Read the pinned Font APEX index, select one exact icon token, add at most one optional fa base class and unique optional catalogue-listed modifiers, and never invent fa-* names."],
+      "required_load_when": ["icon", "icon-only", "icon CSS class", "Font APEX", "fa-"],
+      "phases": ["planning", "generation", "validation", "repair"],
+      "profile_ids": ["icons"],
+      "stop_behavior": "Block final output until every static icon-bearing property has exactly one catalogue icon and only catalogue-listed modifiers.",
+      "enforced_by": ["runtime/internal/python/validate_apexlang.py", "assets/validator-fix-recipes.json"],
+      "details_doc": "assets/indexes/font-apex-icon-index.json"
+    },
+    {
       "rule_id": "BUTTON_BEHAVIOR_TARGET_CONTRACT_001",
       "owner": "references/policies/memory-bank/40-components/apex.buttons.md",
       "applies_to": ["button", "button behavior", "redirectThisApp", "redirectOtherApp"],
@@ -709,6 +883,26 @@
       "enforced_by": ["runtime/internal/python/validate_apexlang.py"],
       "details_doc": "references/policies/memory-bank/30-pages/apex.dashboard.md",
       "examples_doc": "templates/template-components/metric-card/metric-card._common.md"
+    },
+    {
+      "rule_id": "BADGE_TEMPLATE_COMPONENT_CONTRACT_REQUIRED_001",
+      "owner": "templates/template-components/badge/badge._common.md",
+      "applies_to": ["badge", "badge template component", "badge region", "standalone badge"],
+      "summary": "Standalone Badge regions use the native report-mode Badge template component with verified source mappings, exact attributes, an optional link action, and independent authorization enforcement.",
+      "component_ids": ["badge"],
+      "required_load_when": ["badge", "badge template component", "badge region", "standalone badge", "themeTemplateComponent/badge"],
+      "directives": [
+        "Support the full compiler-valid source matrix: localDatabase/restEnabledSql with tableView, sqlQuery, functionBody, or propertyGraph, plus restSource, jsonDualityView, jsonSource, and sampleData; require label and value mappings and emit explicit child columns for delivered source projections.",
+        "Limit the column mapped by Badge settings.value to varchar2, number, date, intervalYearToMonth, or intervalDayToSecond; auxiliary columns retain compiler-supported datatypes.",
+        "Treat Badge state as explicit user intent: when unspecified, omit settings.state and its projected child column so the native Badge uses its normal state; when requested, require a projected varchar2 column whose source contract guarantees exact lowercase danger, warning, success, or info, with SQL proof as an additional check.",
+        "Before assigning a Badge icon, load and consult the pinned Font APEX catalogue; require exactly one catalogue icon and only catalogue-listed modifiers.",
+        "Reject targetUrl and custom linkAttributes unless a future application-specific allowlist contract explicitly models them.",
+        "Allow at most one Badge action, require the link position, and do not invent action templates.",
+        "Keep Badge SQL free of presentation HTML and enforce authorization on both the region and any target page."
+      ],
+      "enforced_by": ["assets/apex-generation/components.registry.json", "runtime/internal/python/validate_apexlang.py"],
+      "details_doc": "templates/template-components/badge/badge._common.md",
+      "examples_doc": "templates/template-components/badge/badge.report-minimal.md"
     },
     {
       "rule_id": "APPLICATION_SPEC_REQUIRED_001",

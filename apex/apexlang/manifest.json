@@ -28,6 +28,7 @@
     "assets/component-attributes.json",
     "assets/grammar/apexlang.ebnf",
     "assets/validator-fix-recipes.json",
+    "assets/indexes/font-apex-icon-index.json",
     "assets/contracts/page-patterns.json",
     "assets/contracts/page-construction-packs.json",
     "assets/contracts/grammar-semantic-rules.json",
@@ -253,6 +254,10 @@
       "source": "ai-context/apexlang/grammar/apexlang.ebnf"
     },
     {
+      "path": "assets/indexes/font-apex-icon-index.json",
+      "source": "skills/apexlang/assets/indexes/font-apex-icon-index.json"
+    },
+    {
       "path": "assets/orchestration.manifest.json",
       "source": "skills/sqlcl/assets/orchestration.manifest.json"
     },
@@ -475,6 +480,10 @@
     {
       "path": "references/domains/template-components/templates.md",
       "source": "skills/apexlang/page-components/template-components/references/templates.md"
+    },
+    {
+      "path": "references/domains/template-components/timeline.md",
+      "source": "skills/apexlang/page-components/template-components/references/timeline.md"
     },
     {
       "path": "references/domains/template-components/workflow-items-templates.md",
@@ -3145,12 +3154,56 @@
       "source": "ai-context/apexlang/templates/template-components/actions/actions.nested-group.md"
     },
     {
-      "path": "templates/template-components/avatar._template_options.md",
-      "source": "ai-context/apexlang/templates/template-components/avatar._template_options.md"
+      "path": "templates/template-components/avatar/README.md",
+      "source": "ai-context/apexlang/templates/template-components/avatar/README.md"
     },
     {
-      "path": "templates/template-components/badge._template_options.md",
-      "source": "ai-context/apexlang/templates/template-components/badge._template_options.md"
+      "path": "templates/template-components/avatar/avatar._common.md",
+      "source": "ai-context/apexlang/templates/template-components/avatar/avatar._common.md"
+    },
+    {
+      "path": "templates/template-components/avatar/avatar._index.md",
+      "source": "ai-context/apexlang/templates/template-components/avatar/avatar._index.md"
+    },
+    {
+      "path": "templates/template-components/avatar/avatar._template_options.md",
+      "source": "ai-context/apexlang/templates/template-components/avatar/avatar._template_options.md"
+    },
+    {
+      "path": "templates/template-components/avatar/avatar.report-icon.md",
+      "source": "ai-context/apexlang/templates/template-components/avatar/avatar.report-icon.md"
+    },
+    {
+      "path": "templates/template-components/avatar/avatar.report-image-url-column.md",
+      "source": "ai-context/apexlang/templates/template-components/avatar/avatar.report-image-url-column.md"
+    },
+    {
+      "path": "templates/template-components/avatar/avatar.report-initials.md",
+      "source": "ai-context/apexlang/templates/template-components/avatar/avatar.report-initials.md"
+    },
+    {
+      "path": "templates/template-components/badge/README.md",
+      "source": "ai-context/apexlang/templates/template-components/badge/README.md"
+    },
+    {
+      "path": "templates/template-components/badge/badge._common.md",
+      "source": "ai-context/apexlang/templates/template-components/badge/badge._common.md"
+    },
+    {
+      "path": "templates/template-components/badge/badge._index.md",
+      "source": "ai-context/apexlang/templates/template-components/badge/badge._index.md"
+    },
+    {
+      "path": "templates/template-components/badge/badge._template_options.md",
+      "source": "ai-context/apexlang/templates/template-components/badge/badge._template_options.md"
+    },
+    {
+      "path": "templates/template-components/badge/badge.report-link.md",
+      "source": "ai-context/apexlang/templates/template-components/badge/badge.report-link.md"
+    },
+    {
+      "path": "templates/template-components/badge/badge.report-minimal.md",
+      "source": "ai-context/apexlang/templates/template-components/badge/badge.report-minimal.md"
     },
     {
       "path": "templates/template-components/button/README.md",
@@ -3181,8 +3234,16 @@
       "source": "ai-context/apexlang/templates/template-components/button/button.navigation.md"
     },
     {
-      "path": "templates/template-components/comments._template_options.md",
-      "source": "ai-context/apexlang/templates/template-components/comments._template_options.md"
+      "path": "templates/template-components/comments/README.md",
+      "source": "ai-context/apexlang/templates/template-components/comments/README.md"
+    },
+    {
+      "path": "templates/template-components/comments/comments._index.md",
+      "source": "ai-context/apexlang/templates/template-components/comments/comments._index.md"
+    },
+    {
+      "path": "templates/template-components/comments/comments._template_options.md",
+      "source": "ai-context/apexlang/templates/template-components/comments/comments._template_options.md"
     },
     {
       "path": "templates/template-components/content-row/README.md",
@@ -3245,12 +3306,28 @@
       "source": "ai-context/apexlang/templates/template-components/content-row/manifest.json"
     },
     {
-      "path": "templates/template-components/flexbox-container._template_options.md",
-      "source": "ai-context/apexlang/templates/template-components/flexbox-container._template_options.md"
+      "path": "templates/template-components/flexbox-container/README.md",
+      "source": "ai-context/apexlang/templates/template-components/flexbox-container/README.md"
     },
     {
-      "path": "templates/template-components/media-list._template_options.md",
-      "source": "ai-context/apexlang/templates/template-components/media-list._template_options.md"
+      "path": "templates/template-components/flexbox-container/flexbox-container._index.md",
+      "source": "ai-context/apexlang/templates/template-components/flexbox-container/flexbox-container._index.md"
+    },
+    {
+      "path": "templates/template-components/flexbox-container/flexbox-container._template_options.md",
+      "source": "ai-context/apexlang/templates/template-components/flexbox-container/flexbox-container._template_options.md"
+    },
+    {
+      "path": "templates/template-components/media-list/README.md",
+      "source": "ai-context/apexlang/templates/template-components/media-list/README.md"
+    },
+    {
+      "path": "templates/template-components/media-list/media-list._index.md",
+      "source": "ai-context/apexlang/templates/template-components/media-list/media-list._index.md"
+    },
+    {
+      "path": "templates/template-components/media-list/media-list._template_options.md",
+      "source": "ai-context/apexlang/templates/template-components/media-list/media-list._template_options.md"
     },
     {
       "path": "templates/template-components/metric-card/README.md",
@@ -3277,8 +3354,28 @@
       "source": "ai-context/apexlang/templates/template-components/template-components.registry.json"
     },
     {
-      "path": "templates/template-components/timeline._template_options.md",
-      "source": "ai-context/apexlang/templates/template-components/timeline._template_options.md"
+      "path": "templates/template-components/timeline/README.md",
+      "source": "ai-context/apexlang/templates/template-components/timeline/README.md"
+    },
+    {
+      "path": "templates/template-components/timeline/timeline._common.md",
+      "source": "ai-context/apexlang/templates/template-components/timeline/timeline._common.md"
+    },
+    {
+      "path": "templates/template-components/timeline/timeline._index.md",
+      "source": "ai-context/apexlang/templates/template-components/timeline/timeline._index.md"
+    },
+    {
+      "path": "templates/template-components/timeline/timeline._template_options.md",
+      "source": "ai-context/apexlang/templates/template-components/timeline/timeline._template_options.md"
+    },
+    {
+      "path": "templates/template-components/timeline/timeline.permutations.md",
+      "source": "ai-context/apexlang/templates/template-components/timeline/timeline.permutations.md"
+    },
+    {
+      "path": "templates/template-components/timeline/timeline.report-sample-data.md",
+      "source": "ai-context/apexlang/templates/template-components/timeline/timeline.report-sample-data.md"
     },
     {
       "path": "templates/template-family-registry.json",

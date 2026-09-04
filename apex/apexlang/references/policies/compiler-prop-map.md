@@ -37,7 +37,7 @@ node tools/compiler-truth-audit.mjs --app-path applications/my-app --verify-comp
 ## Runtime Contract
 
 - This lookup surface reads Oracle's shipped `apexlang_meta_data.json` directly from a discoverable VS Code extension, dbtools home, SQLcl home, or compiler jar.
-- Universal Theme template-component family settings are bundled from the distilled `templates/template-components/template-component-profiles.json` catalog.
+- Universal Theme template-component family settings are bundled from the distilled `templates/template-components/template-component-profiles.json` catalog. That catalog is theme-export inventory only, reports `compilerBacked: false`, and does not establish APEXlang legality.
 - No checked-in compiler prop-map snapshot is shipped in the public package.
 - The helper normalizes metadata in memory for each run so results stay tied to the active runtime.
 - The audit command writes machine-readable compiler-truth evidence and blocks generation workflows when the active runtime metadata or curated component policy provenance is stale.

@@ -8,6 +8,49 @@
   "downloadLabel": "Download",
   "releases": [
     {
+      "version": "2026.08.28",
+      "summary": "This release adds supported Avatar, Badge, and Timeline template-component workflows, pins Font APEX icon validation to a versioned catalogue, and strengthens routing, validation, packaging, and template-registry integrity. Credits to Github user [https://github.com/zrh535](zrh535) for identifying these bugs and proposing the suggested fixes.",
+      "sections": [
+        {
+          "title": "New Supported Template Components",
+          "items": [
+            "Added report-mode Avatar support for initials, icons, and URL-column images.",
+            "Added report-mode Badge support for minimal and linked Badge regions.",
+            "Added Timeline support for report and partial configurations, including optional Avatar and Badge content.",
+            "Timeline Avatar variants now use one matching icon, image, or initials value; initials come from a dedicated projected column.",
+            "Avatar image URLs now accept only `:APP_FILES` or `:APEX_FILES` with a static relative path.",
+            "Moved each template component's options into its own directory."
+          ]
+        },
+        {
+          "title": "Validation, Routing, and Security",
+          "items": [
+            "Badge validation covers table/view, SQL, REST, JSON, function-body, property-graph, and sample-data sources.",
+            "Icon requests keep icon guidance when they also match Cards, Dashboards, Interactive Reports, or Lists.",
+            "Validation now checks source mappings, authorization, nested components, safe targets, and invalid direct page properties."
+          ]
+        },
+        {
+          "title": "Font APEX Icons",
+          "items": [
+            "Added a pinned Font APEX 26.1 icon and modifier index.",
+            "Avatar, Badge, and Timeline icons must use one indexed icon and supported modifiers.",
+            "Added tooling to check and refresh the icon index."
+          ]
+        },
+        {
+          "title": "Merged SQLcl and Runtime Bug Fixes",
+          "items": [
+            "Fixed double decoding of HTML entities during SQLcl script processing.",
+            "Fixed malformed closing script tags in SQLcl runtime scripts.",
+            "Enforced TLS certificate verification in the SQLcl runtime verifier and added regression coverage for verification failures.",
+            "Hardened temporary SQL file creation and cleanup.",
+            "Added regression coverage for HTML decoding, malformed script tags, TLS verification, and temporary SQL-file security."
+          ]
+        }
+      ]
+    },
+    {
       "version": "2026.08.01",
       "summary": "This release makes APEXlang generation more deterministic by establishing explicit grammar, package, pattern, and component contracts. It simplifies orchestration, strengthens compiler-aware validation, improves cross-platform runtime consistency, and delivers safer defaults for file uploads and SQL projections.",
       "sections": [

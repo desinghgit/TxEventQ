@@ -66,19 +66,40 @@ function phraseScore(intent, phrase) {
   return overlap === phraseTokens.length && overlap > 0 ? overlap : 0;
 }
 
-function selectProfiles(catalog, intent, maxProfiles = 2) {
+function intentExplicitlyExcludesIcons(intent) {
+  return /\b(?:without|omit|omits|exclude|excludes)\s+(?:an?\s+|the\s+)?(?:icon|icons|checkmark|glyph|pictogram)\b/.test(intent)
+    || /\bno\s+(?:icon|icons|checkmark|glyph|pictogram)\b/.test(intent)
+    || /\bdo(?:es)?\s+not\s+(?:use|add|show|include)\s+(?:an?\s+|the\s+)?(?:icon|icons|checkmark|glyph|pictogram)\b/.test(intent)
+    || /\bicon\s+free\b/.test(intent);
+}
+
+function matchesSelectedComponents(entry, selectedComponentIds) {
+  const componentIds = entry.component_ids ?? [];
+  return componentIds.length === 0
+    || selectedComponentIds.size === 0
+    || componentIds.some((componentId) => selectedComponentIds.has(componentId));
+}
+
+function selectProfiles(catalog, intent, selectedComponentIds, maxProfiles = 2) {
+  const excludesIcons = intentExplicitlyExcludesIcons(intent);
   const ranked = (catalog.profiles ?? [])
     .map((profile) => ({
       ...profile,
       __score: Math.max(0, ...(profile.keywords ?? []).map((keyword) => phraseScore(intent, keyword)))
     }))
-    .filter((profile) => profile.__score >= 3)
+    .filter((profile) => profile.__score >= 3
+      && !(excludesIcons && profile.id === "icons")
+      && matchesSelectedComponents(profile, selectedComponentIds))
     .sort((left, right) => right.__score - left.__score || String(left.id).localeCompare(String(right.id)));
   const topScore = ranked[0]?.__score ?? 0;
-  return ranked
+  const selected = ranked
     .filter((profile, index) => index === 0 || profile.__score >= topScore * 0.75)
-    .slice(0, maxProfiles)
-    .map(({ __score, ...profile }) => profile);
+    .slice(0, maxProfiles);
+  const iconProfile = ranked.find((profile) => profile.id === "icons" && profile.__score >= 4);
+  if (iconProfile && !selected.some((profile) => profile.id === "icons")) {
+    selected.splice(Math.max(0, maxProfiles - 1), 1, iconProfile);
+  }
+  return selected.map(({ __score, ...profile }) => profile);
 }
 
 function selectComponents(registry, intent, maxComponents = 4) {
@@ -111,14 +132,20 @@ function selectComponents(registry, intent, maxComponents = 4) {
     selected.push(entry);
     if (selected.length >= maxComponents) break;
   }
-  return selected.map(({ component }) => ({
-    name: component.name,
-    target_type: component.target_type,
-    rules: component.rules ?? [],
-    templates: component.templates ?? [],
-    requires: component.requires ?? {},
-    workflow: component.workflow
-  }));
+  const exclusions = new Set(selected.flatMap(({ component }) => component.excludes ?? []));
+  return selected.filter(({ component }) => !exclusions.has(component.name)).map(({ component }) => {
+    const conditionalTemplates = (component.conditionalTemplates ?? [])
+      .filter((route) => Math.max(0, ...(route.keywords ?? []).map((keyword) => phraseScore(intent, keyword))) > 0)
+      .flatMap((route) => route.templates ?? []);
+    return {
+      name: component.name,
+      target_type: component.target_type,
+      rules: component.rules ?? [],
+      templates: uniqueStrings([...(component.templates ?? []), ...conditionalTemplates]),
+      requires: component.requires ?? {},
+      workflow: component.workflow
+    };
+  });
 }
 
 function patternContractById(patternCatalog, packCatalog, patternId, components = []) {
@@ -153,7 +180,8 @@ function patternContractById(patternCatalog, packCatalog, patternId, components 
   };
 }
 
-function selectRuleCards(catalog, intent, profiles, additionalRuleIds = []) {
+function selectRuleCards(catalog, intent, profiles, additionalRuleIds = [], selectedComponentIds = new Set()) {
+  const excludesIcons = intentExplicitlyExcludesIcons(intent);
   const requiredIds = new Set([
     ...(catalog.core_rule_ids ?? []),
     ...profiles.flatMap((profile) => profile.rule_ids ?? []),
@@ -161,6 +189,12 @@ function selectRuleCards(catalog, intent, profiles, additionalRuleIds = []) {
   ]);
   return (catalog.rules ?? [])
     .filter((rule) => {
+      if (!matchesSelectedComponents(rule, selectedComponentIds)) {
+        return false;
+      }
+      if (excludesIcons && rule.rule_id === "FA_ICON_REQUIRED_001") {
+        return false;
+      }
       if (requiredIds.has(rule.rule_id)) {
         return true;
       }
@@ -367,10 +401,17 @@ export async function resolveContextCapsule({ intent, phase = "draft", maxBytes 
     readJson(assets.packs),
     readJson(assets.components)
   ]);
-  const profiles = selectProfiles(catalog, normalizedIntent);
   const components = selectComponents(componentRegistry, normalizedIntent);
+  const selectedComponentIds = new Set(components.map((component) => component.name));
+  const profiles = selectProfiles(catalog, normalizedIntent, selectedComponentIds);
   const patterns = selectPatterns(patternCatalog, packCatalog, normalizedIntent);
-  const rules = selectRuleCards(catalog, normalizedIntent, profiles, patterns.flatMap((pattern) => pattern.validation_rules));
+  const rules = selectRuleCards(
+    catalog,
+    normalizedIntent,
+    profiles,
+    patterns.flatMap((pattern) => pattern.validation_rules),
+    selectedComponentIds
+  );
   const profileRuleIds = uniqueStrings(profiles.flatMap((profile) => profile.rule_ids ?? []));
   const profileRecipes = profileRuleIds
     .filter((ruleId) => recipeCatalog.recipes?.[ruleId])

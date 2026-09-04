@@ -1739,20 +1739,20 @@ function normalizeRuntimeProvider(value = DEFAULT_RUNTIME_PROVIDER) {
   return DEFAULT_RUNTIME_PROVIDER;
 }
 
-function decodeHtmlEntities(value = "") {
+export function decodeHtmlEntities(value = "") {
   return String(value)
     .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, "\"")
-    .replace(/&#39;/gi, "'");
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, "&");
 }
 
-function extractTextFromHtml(html = "") {
+export function extractTextFromHtml(html = "") {
   return decodeHtmlEntities(
     String(html)
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>/gi, " ")
       .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
       .replace(RUNTIME_TEXT_TAG_STRIP_PATTERN, " ")
       .replace(/\s+/g, " ")
@@ -1801,22 +1801,22 @@ function safeArtifactName(prefix, detail, suffix) {
   return `${sanitizeArtifactFilePart(prefix)}-${sanitizeArtifactFilePart(detail)}.${suffix}`;
 }
 
-async function requestRuntimeUrl(targetUrl, { maxRedirects = 5 } = {}) {
+export async function requestRuntimeUrl(targetUrl, { maxRedirects = 5, requestImpl } = {}) {
   const visited = [];
 
   async function execute(currentUrl, redirectsRemaining) {
     const parsedUrl = new URL(currentUrl);
     const client = parsedUrl.protocol === "https:" ? https : http;
     const result = await new Promise((resolve, reject) => {
-      const req = client.request(
+      const request = requestImpl ?? client.request.bind(client);
+      const req = request(
         parsedUrl,
         {
           method: "GET",
           headers: {
             "user-agent": "apexctl-runtime-verifier/1.0",
             accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-          },
-          rejectUnauthorized: false
+          }
         },
         (res) => {
           const chunks = [];
@@ -2081,7 +2081,8 @@ async function verifyRuntimeUiWithHttpFallback({
   runtimePageUrl = "",
   pageId = "",
   artifactDir = DEFAULT_RUNTIME_VERIFY_ARTIFACT_DIR,
-  runCommandImpl
+  runCommandImpl,
+  requestRuntimeUrlImpl = requestRuntimeUrl
 }) {
   const baseUrlResolution = runtimePageUrl
     ? { status: "pass", runtimeBaseUrl: "", checkedCandidates: [] }
@@ -2178,7 +2179,7 @@ async function verifyRuntimeUiWithHttpFallback({
     }
 
     try {
-      const response = await requestRuntimeUrl(target.runtimeUrl);
+      const response = await requestRuntimeUrlImpl(target.runtimeUrl);
       const htmlArtifactPath = path.join(
         artifactDir,
         safeArtifactName(`runtime-page-${targetsResult.appIdentity.applicationId || "app"}`, String(target.pageId), "html")
@@ -2270,6 +2271,7 @@ async function verifyRuntimeUiWithHttpFallback({
 export async function verifyRuntimeUi(options = {}) {
   const deps = {
     runCommand,
+    requestRuntimeUrl,
     verifyRuntimeWithChromeDevtools: null,
     ...options._deps
   };
@@ -2313,7 +2315,8 @@ export async function verifyRuntimeUi(options = {}) {
     runtimePageUrl: options.runtimePageUrl,
     pageId: options.pageId,
     artifactDir,
-    runCommandImpl: deps.runCommand
+    runCommandImpl: deps.runCommand,
+    requestRuntimeUrlImpl: deps.requestRuntimeUrl
   });
   result.payload.runtime_verification_provider_requested = requestedProvider;
   if (requestedProvider === RUNTIME_PROVIDER_CHROME) {
@@ -4340,18 +4343,32 @@ function runPathSession({ dbConnectionName, input, labelPrefix = "sql" }) {
   };
 }
 
-async function runBuildRootSession({ buildRoot, input, label = "apex_sql_build_root" }) {
-  const tempScriptPath = path.join(os.tmpdir(), `apexctl-roundtrip-${Date.now()}.sql`);
-  await fs.writeFile(tempScriptPath, `${input}\n`, "utf8");
-  const result = runInteractiveCommand("apex", ["sql", "-s", tempScriptPath], { cwd: buildRoot });
-  await fs.rm(tempScriptPath, { force: true });
-  return {
-    success: !hasWorkspaceAmbiguity(result) && !hasRuntimeFailure(result),
-    workspaceAmbiguity: hasWorkspaceAmbiguity(result),
-    entrypoint: label,
-    result,
-    transcript: `## ${label}\n${cleanOutput(result)}\n`
-  };
+export async function runBuildRootSession({
+  buildRoot,
+  input,
+  label = "apex_sql_build_root",
+  _deps = {}
+}) {
+  const runInteractiveCommandImpl = _deps.runInteractiveCommand ?? runInteractiveCommand;
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "apexctl-roundtrip-"));
+  const tempScriptPath = path.join(tempDirectory, "session.sql");
+  try {
+    await fs.writeFile(tempScriptPath, `${input}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx"
+    });
+    const result = runInteractiveCommandImpl("apex", ["sql", "-s", tempScriptPath], { cwd: buildRoot });
+    return {
+      success: !hasWorkspaceAmbiguity(result) && !hasRuntimeFailure(result),
+      workspaceAmbiguity: hasWorkspaceAmbiguity(result),
+      entrypoint: label,
+      result,
+      transcript: `## ${label}\n${cleanOutput(result)}\n`
+    };
+  } finally {
+    await fs.rm(tempDirectory, { recursive: true, force: true });
+  }
 }
 
 function runPathRoundtrip({ appPath, dbConnectionName, workspaceId, includeImport = true }) {

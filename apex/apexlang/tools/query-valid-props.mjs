@@ -423,7 +423,7 @@ Options:
   --component-type-id <id>     Exact compiler component type id, for example 5110
   --parent <name>              Filter by parent semantic name, for example page or region
   --group <name>               Show only one group, for example source
-  --template-component <name>  Inspect Universal Theme template-component metadata and distilled settings
+  --template-component <name>  Inspect Universal Theme export metadata (inventory only; not compiler-backed)
   --audit-optional-properties  Emit pageItem grammar/compiler optional-property audit JSON
   --when <expr>                Assumption used to classify props, for example identification.type=NATIVE_IR or 94=NATIVE_IR
   --list                       List matching component types instead of property details
@@ -445,6 +445,9 @@ Examples:
 
 function renderTemplateComponentProfile(profile) {
   console.log(`templateComponent ${profile.requestedName} [theme=${profile.theme}]`);
+  console.log(`authority: ${profile.authority}`);
+  console.log(`compilerBacked: ${profile.compilerBacked}`);
+  console.log(`warning: ${profile.limitations.join(" ")}`);
   console.log(`plugin: ${profile.plugin.identifier}`);
   console.log(`name: ${profile.plugin.name || "unknown"}`);
   console.log(`staticId: ${profile.plugin.staticId || "unknown"}`);
